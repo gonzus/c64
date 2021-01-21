@@ -10,16 +10,19 @@ pub const CPU = struct {
     const INITIAL_ADDRESS = 0xF000;
 
     PC: Type.Word, // Program Counter
-    SP: Type.Byte, // Stack Pointer
     P: Status, // Processor Status
 
-    A: Type.Byte, // Accumulator
-    X: Type.Byte, // X register
-    Y: Type.Byte, // Y register
-
+    regs: [4]Type.Byte,
     memory: Memory, // Memory bank with 64 KB -- wow
 
     ticks: u32, // Cycle counter
+
+    // TODO: I would like these to be members of an enum, and have an array of
+    // them.
+    const A = 0;
+    const X = 1;
+    const Y = 2;
+    const SP = 3;
 
     const AddressingMode = enum {
         Immediate,
@@ -49,11 +52,8 @@ pub const CPU = struct {
     pub fn init() CPU {
         var self = CPU{
             .PC = undefined,
-            .SP = undefined,
             .P = undefined,
-            .A = undefined,
-            .X = undefined,
-            .Y = undefined,
+            .regs = undefined,
             .memory = undefined,
             .ticks = undefined,
         };
@@ -63,11 +63,11 @@ pub const CPU = struct {
 
     pub fn reset(self: *CPU, address: Type.Word) void {
         self.PC = address;
-        self.SP = 0;
         self.P.clear();
-        self.A = 0;
-        self.X = 0;
-        self.Y = 0;
+        self.regs[SP] = 0;
+        self.regs[A] = 0;
+        self.regs[X] = 0;
+        self.regs[Y] = 0;
         self.memory.clear();
         self.ticks = 0;
     }
@@ -79,28 +79,28 @@ pub const CPU = struct {
             self.PC += 1;
             switch (op) {
                 OP.LDA_IMM => {
-                    self.A = self.fetch(.Immediate);
+                    self.fetch(.Immediate, A);
                 },
                 OP.LDA_ZP => {
-                    self.A = self.fetch(.ZeroPage);
+                    self.fetch(.ZeroPage, A);
                 },
                 OP.LDA_ZPX => {
-                    self.A = self.fetch(.ZeroPageX);
+                    self.fetch(.ZeroPageX, A);
                 },
                 OP.LDA_ABS => {
-                    self.A = self.fetch(.Absolute);
+                    self.fetch(.Absolute, A);
                 },
                 OP.LDA_ABSX => {
-                    self.A = self.fetch(.AbsoluteX);
+                    self.fetch(.AbsoluteX, A);
                 },
                 OP.LDA_ABSY => {
-                    self.A = self.fetch(.AbsoluteY);
+                    self.fetch(.AbsoluteY, A);
                 },
                 OP.LDA_XR => {
-                    self.A = self.fetch(.IndexedIndirect);
+                    self.fetch(.IndexedIndirect, A);
                 },
                 OP.LDA_RX => {
-                    self.A = self.fetch(.IndirectIndexed);
+                    self.fetch(.IndirectIndexed, A);
                 },
                 OP.NOP => {
                     self.tick();
@@ -110,7 +110,7 @@ pub const CPU = struct {
         return self.ticks - start;
     }
 
-    fn fetch(self: *CPU, mode: AddressingMode) Type.Byte {
+    fn fetch(self: *CPU, mode: AddressingMode, register: usize) void {
         const fetched = switch (mode) {
             .Immediate => blk: {
                 const value = self.read(self.PC);
@@ -125,14 +125,14 @@ pub const CPU = struct {
             .ZeroPageX => blk: {
                 var address = @as(Type.Word, self.read(self.PC));
                 self.PC += 1;
-                address +%= self.X;
+                address +%= self.regs[X];
                 self.tick();
                 break :blk self.read(address);
             },
             .ZeroPageY => blk: {
                 var address = @as(Type.Word, self.read(self.PC));
                 self.PC += 1;
-                address +%= self.Y;
+                address +%= self.regs[Y];
                 self.tick();
                 break :blk self.read(address);
             },
@@ -150,7 +150,7 @@ pub const CPU = struct {
                 const hi = @as(Type.Word, self.read(self.PC)) << 8;
                 self.PC += 1;
                 const initial = hi | lo;
-                const final = initial + self.X;
+                const final = initial + self.regs[X];
                 if (!samePage(initial, final)) {
                     self.tick();
                 }
@@ -162,7 +162,7 @@ pub const CPU = struct {
                 const hi = @as(Type.Word, self.read(self.PC)) << 8;
                 self.PC += 1;
                 const initial = hi | lo;
-                const final = initial + self.Y;
+                const final = initial + self.regs[Y];
                 if (!samePage(initial, final)) {
                     self.tick();
                 }
@@ -171,7 +171,7 @@ pub const CPU = struct {
             .IndexedIndirect => blk: {
                 var address = @as(Type.Word, self.read(self.PC));
                 self.PC += 1;
-                address +%= self.X;
+                address +%= self.regs[X];
                 self.tick();
                 const lo = @as(Type.Word, self.read(address + 0)) << 0;
                 const hi = @as(Type.Word, self.read(address + 1)) << 8;
@@ -184,7 +184,7 @@ pub const CPU = struct {
                 const lo = @as(Type.Word, self.read(address + 0)) << 0;
                 const hi = @as(Type.Word, self.read(address + 1)) << 8;
                 const initial = hi | lo;
-                const final = initial + self.Y;
+                const final = initial + self.regs[Y];
                 if (!samePage(initial, final)) {
                     self.tick();
                 }
@@ -192,7 +192,7 @@ pub const CPU = struct {
             },
         };
         self.setNZ(fetched);
-        return fetched;
+        self.regs[register] = fetched;
     }
 
     fn read(self: *CPU, address: Type.Word) Type.Byte {
@@ -226,7 +226,7 @@ test "create CPU" {
     testing.expect(cpu.PC == TEST_ADDRESS);
 }
 
-fn test_lda(cpu: *CPU, address: Type.Word, ticks: u32) void {
+fn test_load_register(cpu: *CPU, address: Type.Word, register: usize, ticks: u32) void {
     const Data = struct {
         v: Type.Byte,
         N: Type.Bit,
@@ -241,13 +241,11 @@ fn test_lda(cpu: *CPU, address: Type.Word, ticks: u32) void {
         cpu.PC = TEST_ADDRESS;
         cpu.memory.data[address] = d.v;
         const prevP = cpu.P;
-        const prevSP = cpu.SP;
-        const prevX = cpu.X;
-        const prevY = cpu.Y;
+        const prevRegs = cpu.regs;
         cpu.P.byte = 0;
         const used = cpu.run(ticks);
         testing.expect(used == ticks);
-        testing.expect(cpu.A == d.v);
+        testing.expect(cpu.regs[register] == d.v);
         testing.expect(cpu.P.bits.N == d.N);
         testing.expect(cpu.P.bits.Z == d.Z);
         testing.expect(cpu.P.bits.C == prevP.bits.C);
@@ -255,9 +253,10 @@ fn test_lda(cpu: *CPU, address: Type.Word, ticks: u32) void {
         testing.expect(cpu.P.bits.D == prevP.bits.D);
         testing.expect(cpu.P.bits.B == prevP.bits.B);
         testing.expect(cpu.P.bits.V == prevP.bits.V);
-        testing.expect(cpu.SP == prevSP);
-        testing.expect(cpu.X == prevX);
-        testing.expect(cpu.Y == prevY);
+        testing.expect(register == CPU.A or cpu.regs[CPU.A] == prevRegs[CPU.A]);
+        testing.expect(register == CPU.X or cpu.regs[CPU.X] == prevRegs[CPU.X]);
+        testing.expect(register == CPU.Y or cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
+        testing.expect(register == CPU.SP or cpu.regs[CPU.SP] == prevRegs[CPU.SP]);
     }
 }
 
@@ -265,7 +264,7 @@ test "run LDA_IMM" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0xA9;
-    test_lda(&cpu, TEST_ADDRESS + 1, 2);
+    test_load_register(&cpu, TEST_ADDRESS + 1, CPU.A, 2);
 }
 
 test "run LDA_ZP" {
@@ -273,16 +272,16 @@ test "run LDA_ZP" {
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0xA5;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
-    test_lda(&cpu, 0x0011, 3);
+    test_load_register(&cpu, 0x0011, CPU.A, 3);
 }
 
 test "run LDA_ZPX" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
-    cpu.X = 7;
+    cpu.regs[CPU.X] = 7;
     cpu.memory.data[TEST_ADDRESS + 0] = 0xB5;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
-    test_lda(&cpu, 0x0011 + 7, 4);
+    test_load_register(&cpu, 0x0011 + 7, CPU.A, 4);
 }
 
 test "run LDA_ABS" {
@@ -291,80 +290,80 @@ test "run LDA_ABS" {
     cpu.memory.data[TEST_ADDRESS + 0] = 0xAD;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
-    test_lda(&cpu, 0x8311, 4);
+    test_load_register(&cpu, 0x8311, CPU.A, 4);
 }
 
 test "run LDA_ABSX same page" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
-    cpu.X = 7;
+    cpu.regs[CPU.X] = 7;
     cpu.memory.data[TEST_ADDRESS + 0] = 0xBD;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
-    test_lda(&cpu, 0x8311 + 7, 4);
+    test_load_register(&cpu, 0x8311 + 7, CPU.A, 4);
 }
 
 test "run LDA_ABSY same page" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
-    cpu.Y = 7;
+    cpu.regs[CPU.Y] = 7;
     cpu.memory.data[TEST_ADDRESS + 0] = 0xB9;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
-    test_lda(&cpu, 0x8311 + 7, 4);
+    test_load_register(&cpu, 0x8311 + 7, CPU.A, 4);
 }
 
 test "run LDA_ABSX cross page" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
-    cpu.X = 0xFE;
+    cpu.regs[CPU.X] = 0xFE;
     cpu.memory.data[TEST_ADDRESS + 0] = 0xBD;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
-    test_lda(&cpu, 0x8311 + 0xFE, 5);
+    test_load_register(&cpu, 0x8311 + 0xFE, CPU.A, 5);
 }
 
 test "run LDA_ABSY cross page" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
-    cpu.Y = 0xFE;
+    cpu.regs[CPU.Y] = 0xFE;
     cpu.memory.data[TEST_ADDRESS + 0] = 0xB9;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
-    test_lda(&cpu, 0x8311 + 0xFE, 5);
+    test_load_register(&cpu, 0x8311 + 0xFE, CPU.A, 5);
 }
 
 test "run LDA_XR" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
-    cpu.X = 4;
+    cpu.regs[CPU.X] = 4;
     cpu.memory.data[TEST_ADDRESS + 0] = 0xA1;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x20;
     cpu.memory.data[0x20 + 4 + 0] = 0x74;
     cpu.memory.data[0x20 + 4 + 1] = 0x20;
-    test_lda(&cpu, 0x2074, 6);
+    test_load_register(&cpu, 0x2074, CPU.A, 6);
 }
 
 test "run LDA_RX same page" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
-    cpu.Y = 0x10;
+    cpu.regs[CPU.Y] = 0x10;
     cpu.memory.data[TEST_ADDRESS + 0] = 0xB1;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
     cpu.memory.data[0x86 + 0] = 0x28;
     cpu.memory.data[0x86 + 1] = 0x40;
-    test_lda(&cpu, 0x4028 + 0x10, 5);
+    test_load_register(&cpu, 0x4028 + 0x10, CPU.A, 5);
 }
 
 test "run LDA_RX cross page" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
-    cpu.Y = 0xFE;
+    cpu.regs[CPU.Y] = 0xFE;
     cpu.memory.data[TEST_ADDRESS + 0] = 0xB1;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
     cpu.memory.data[0x86 + 0] = 0x28;
     cpu.memory.data[0x86 + 1] = 0x40;
-    test_lda(&cpu, 0x4028 + 0xFE, 6);
+    test_load_register(&cpu, 0x4028 + 0xFE, CPU.A, 6);
 }
 
 test "run NOP" {
