@@ -1,13 +1,11 @@
 const std = @import("std");
+const Type = @import("types.zig").Type;
 const testing = std.testing;
 
 const allocator = std.heap.page_allocator;
 
-const Byte = u8;
-const Bit = u1;
-
 pub const Status = extern union {
-    byte: Byte,
+    byte: Type.Byte,
     bits: Bits,
 
     const Name = enum {
@@ -22,21 +20,21 @@ pub const Status = extern union {
     };
 
     const Bits = packed struct {
-        C: Bit,
-        Z: Bit,
-        I: Bit,
-        D: Bit,
-        B: Bit,
-        u: Bit,
-        V: Bit,
-        N: Bit,
+        C: Type.Bit,
+        Z: Type.Bit,
+        I: Type.Bit,
+        D: Type.Bit,
+        B: Type.Bit,
+        u: Type.Bit,
+        V: Type.Bit,
+        N: Type.Bit,
     };
 
     pub fn init() Status {
         return Status.initFromByte(0);
     }
 
-    pub fn initFromByte(byte: Byte) Status {
+    pub fn initFromByte(byte: Type.Byte) Status {
         var self = Status{
             .byte = byte,
         };
@@ -48,20 +46,24 @@ pub const Status = extern union {
         out.print("C={d} Z={d} I={d} D={d} B={d} V={d} N={d}\n", .{ self.bits.C, self.bits.Z, self.bits.I, self.bits.D, self.bits.B, self.bits.V, self.bits.N }) catch unreachable;
     }
 
-    pub fn getBitByName(self: Status, name: Name) Bit {
+    pub fn getBitByName(self: Status, name: Name) Type.Bit {
         const shift = @enumToInt(name);
-        const mask = @as(Byte, 1) << shift;
+        const mask = @as(Type.Byte, 1) << shift;
         return if ((self.byte & mask) > 0) 1 else 0;
     }
 
     pub fn setBitByName(self: *Status, name: Name, bit: u1) void {
         const shift = @enumToInt(name);
-        const mask = @as(Byte, 1) << shift;
+        const mask = @as(Type.Byte, 1) << shift;
         if (bit == 1) {
             self.byte |= mask;
         } else {
             self.byte &= ~mask;
         }
+    }
+
+    pub fn clear(self: *Status) void {
+        self.byte = 0;
     }
 };
 
@@ -82,7 +84,7 @@ test "create zero PS" {
 }
 
 test "create PS with initial byte value" {
-    const byte: Byte = 0b10000000;
+    const byte: Type.Byte = 0b10000000;
     var PS = Status.initFromByte(byte);
     testing.expect(PS.byte == byte);
     testing.expect(PS.bits.C == 0);
