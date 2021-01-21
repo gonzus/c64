@@ -79,44 +79,28 @@ pub const CPU = struct {
             self.PC += 1;
             switch (op) {
                 OP.LDA_IMM => {
-                    const value = self.fetch(.Immediate);
-                    self.A = value;
-                    self.setNZ(value);
+                    self.A = self.fetch(.Immediate);
                 },
                 OP.LDA_ZP => {
-                    const value = self.fetch(.ZeroPage);
-                    self.A = value;
-                    self.setNZ(value);
+                    self.A = self.fetch(.ZeroPage);
                 },
                 OP.LDA_ZPX => {
-                    const value = self.fetch(.ZeroPageX);
-                    self.A = value;
-                    self.setNZ(value);
+                    self.A = self.fetch(.ZeroPageX);
                 },
                 OP.LDA_ABS => {
-                    const value = self.fetch(.Absolute);
-                    self.A = value;
-                    self.setNZ(value);
+                    self.A = self.fetch(.Absolute);
                 },
                 OP.LDA_ABSX => {
-                    const value = self.fetch(.AbsoluteX);
-                    self.A = value;
-                    self.setNZ(value);
+                    self.A = self.fetch(.AbsoluteX);
                 },
                 OP.LDA_ABSY => {
-                    const value = self.fetch(.AbsoluteY);
-                    self.A = value;
-                    self.setNZ(value);
+                    self.A = self.fetch(.AbsoluteY);
                 },
                 OP.LDA_XR => {
-                    const value = self.fetch(.IndexedIndirect);
-                    self.A = value;
-                    self.setNZ(value);
+                    self.A = self.fetch(.IndexedIndirect);
                 },
                 OP.LDA_RX => {
-                    const value = self.fetch(.IndirectIndexed);
-                    self.A = value;
-                    self.setNZ(value);
+                    self.A = self.fetch(.IndirectIndexed);
                 },
                 OP.NOP => {
                     self.tick();
@@ -207,6 +191,7 @@ pub const CPU = struct {
                 break :blk self.read(final);
             },
         };
+        self.setNZ(fetched);
         return fetched;
     }
 
