@@ -76,7 +76,7 @@ test "create zero PS" {
     PS.bits.N = 1;
     testing.expect(PS.getBitByName(Status.Name.Carry) == 1);
     testing.expect(PS.bits.C == 1);
-    PS.show();
+    // PS.show();
 
     PS.bits.C = 0;
     testing.expect(PS.getBitByName(Status.Name.Carry) == 0);
@@ -98,6 +98,6 @@ test "create PS with initial bit values" {
     PS.bits.C = 1;
     PS.bits.V = 1;
     PS.bits.N = 1;
-    PS.show();
+    // PS.show();
     testing.expect(PS.byte == 0b11000001);
 }
