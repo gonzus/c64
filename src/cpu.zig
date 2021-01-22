@@ -8,6 +8,7 @@ const allocator = std.heap.page_allocator;
 
 pub const CPU = struct {
     const INITIAL_ADDRESS = 0xF000;
+    const STACK_BASE = 0x0100;
 
     PC: Type.Word, // Program Counter
     PS: Status, // Processor Status
@@ -78,6 +79,13 @@ pub const CPU = struct {
         TAY = 0xA8,
         TXA = 0x8A,
         TYA = 0x98,
+        TSX = 0xBA,
+        TXS = 0x9A,
+
+        PHA = 0x48,
+        PHP = 0x08,
+        PLA = 0x68,
+        PLP = 0x28,
 
         NOP = 0xEA,
     };
@@ -97,7 +105,7 @@ pub const CPU = struct {
     pub fn reset(self: *CPU, address: Type.Word) void {
         self.PC = address;
         self.PS.clear();
-        self.regs[SP] = 0;
+        self.regs[SP] = 0xFF;
         self.regs[A] = 0;
         self.regs[X] = 0;
         self.regs[Y] = 0;
@@ -148,10 +156,17 @@ pub const CPU = struct {
                 OP.STY_ZPX => self.store(Y, .ZeroPageX),
                 OP.STY_ABS => self.store(Y, .Absolute),
 
-                OP.TAX => self.transfer(A, X),
-                OP.TAY => self.transfer(A, Y),
-                OP.TXA => self.transfer(X, A),
-                OP.TYA => self.transfer(Y, A),
+                OP.TAX => self.transfer(A, X, true),
+                OP.TAY => self.transfer(A, Y, true),
+                OP.TXA => self.transfer(X, A, true),
+                OP.TYA => self.transfer(Y, A, true),
+                OP.TSX => self.transfer(SP, X, true),
+                OP.TXS => self.transfer(X, SP, false),
+
+                OP.PHA => self.push(self.regs[A]),
+                OP.PHP => self.push(self.PS.byte),
+                OP.PLA => self.regs[A] = self.pop(true),
+                OP.PLP => self.PS.byte = self.pop(false),
 
                 OP.NOP => self.tick(),
             }
@@ -171,10 +186,31 @@ pub const CPU = struct {
         self.writeByte(address, self.regs[register]);
     }
 
-    fn transfer(self: *CPU, source: usize, target: usize) void {
+    fn transfer(self: *CPU, source: usize, target: usize, flags: bool) void {
         self.regs[target] = self.regs[source];
-        self.setNZ(self.regs[target]);
+        if (flags) {
+            self.setNZ(self.regs[target]);
+        }
         self.tick();
+    }
+
+    fn push(self: *CPU, value: Type.Byte) void {
+        const address = @as(Type.Word, STACK_BASE) + self.regs[SP];
+        self.writeByte(address, value);
+        self.regs[SP] -%= 1;
+        self.tick();
+    }
+
+    fn pop(self: *CPU, flags: bool) Type.Byte {
+        self.regs[SP] +%= 1;
+        self.tick();
+        const address = @as(Type.Word, STACK_BASE) + self.regs[SP];
+        self.tick();
+        const value = self.readByte(address);
+        if (flags) {
+            self.setNZ(value);
+        }
+        return value;
     }
 
     fn computeAddress(self: *CPU, mode: AddressingMode) Type.Word {
@@ -305,7 +341,7 @@ fn test_load_register(cpu: *CPU, register: usize, address: Type.Word, ticks: u32
     for (data) |d| {
         cpu.PC = TEST_ADDRESS;
         cpu.memory.data[address] = d.v; // put value in memory address
-        const prevP = cpu.PS; // remember PS
+        const prevPS = cpu.PS; // remember PS
         const prevRegs = cpu.regs; // remember registers
         cpu.regs[register] = 0; // set desired register to 0
         cpu.PS.byte = 0; // set PS to 0
@@ -317,11 +353,11 @@ fn test_load_register(cpu: *CPU, register: usize, address: Type.Word, ticks: u32
         testing.expect(cpu.PS.bits.Z == d.Z); // got correct Z bit?
 
         // other bits didn't change?
-        testing.expect(cpu.PS.bits.C == prevP.bits.C);
-        testing.expect(cpu.PS.bits.I == prevP.bits.I);
-        testing.expect(cpu.PS.bits.D == prevP.bits.D);
-        testing.expect(cpu.PS.bits.B == prevP.bits.B);
-        testing.expect(cpu.PS.bits.V == prevP.bits.V);
+        testing.expect(cpu.PS.bits.C == prevPS.bits.C);
+        testing.expect(cpu.PS.bits.I == prevPS.bits.I);
+        testing.expect(cpu.PS.bits.D == prevPS.bits.D);
+        testing.expect(cpu.PS.bits.B == prevPS.bits.B);
+        testing.expect(cpu.PS.bits.V == prevPS.bits.V);
 
         // registers either got set or didn't change?
         testing.expect(register == CPU.A or cpu.regs[CPU.A] == prevRegs[CPU.A]);
@@ -334,18 +370,16 @@ fn test_load_register(cpu: *CPU, register: usize, address: Type.Word, ticks: u32
 fn test_save_register(cpu: *CPU, register: usize, address: Type.Word, ticks: u32) void {
     const Data = struct {
         v: Type.Byte,
-        N: Type.Bit,
-        Z: Type.Bit,
     };
     const data = [_]Data{
-        .{ .v = 0x11, .N = 0, .Z = 0 },
-        .{ .v = 0xF0, .N = 1, .Z = 0 },
-        .{ .v = 0x00, .N = 0, .Z = 1 },
+        .{ .v = 0x11 },
+        .{ .v = 0xF0 },
+        .{ .v = 0x00 },
     };
     for (data) |d| {
         cpu.PC = TEST_ADDRESS;
         cpu.regs[register] = d.v; // put value in register
-        const prevP = cpu.PS; // remember PS
+        const prevPS = cpu.PS; // remember PS
         const prevRegs = cpu.regs; // remember registers
         cpu.memory.data[address] = 0; // set desired address to 0
         cpu.PS.byte = 0; // set PS to 0
@@ -353,7 +387,7 @@ fn test_save_register(cpu: *CPU, register: usize, address: Type.Word, ticks: u32
 
         testing.expect(used == ticks);
         testing.expect(cpu.memory.data[address] == d.v); // got correct value in memory?
-        testing.expect(cpu.PS.byte == prevP.byte); // PS didn't change?
+        testing.expect(cpu.PS.byte == prevPS.byte); // PS didn't change?
 
         // registers didn't change?
         testing.expect(cpu.regs[CPU.A] == prevRegs[CPU.A]);
@@ -363,7 +397,7 @@ fn test_save_register(cpu: *CPU, register: usize, address: Type.Word, ticks: u32
     }
 }
 
-fn test_transfer_register(cpu: *CPU, source: usize, target: usize, ticks: u32) void {
+fn test_transfer_register(cpu: *CPU, source: usize, target: usize, flags: bool, ticks: u32) void {
     const Data = struct {
         v: Type.Byte,
         N: Type.Bit,
@@ -377,7 +411,7 @@ fn test_transfer_register(cpu: *CPU, source: usize, target: usize, ticks: u32) v
     for (data) |d| {
         cpu.PC = TEST_ADDRESS;
         cpu.regs[source] = d.v; // put value in source register
-        const prevP = cpu.PS; // remember PS
+        const prevPS = cpu.PS; // remember PS
         const prevRegs = cpu.regs; // remember registers
         cpu.regs[target] = 0; // set target register to 0
         cpu.PS.byte = 0; // set PS to 0
@@ -385,15 +419,20 @@ fn test_transfer_register(cpu: *CPU, source: usize, target: usize, ticks: u32) v
 
         testing.expect(used == ticks);
         testing.expect(cpu.regs[target] == d.v); // got correct value in target registry?
-        testing.expect(cpu.PS.bits.N == d.N); // got correct N bit?
-        testing.expect(cpu.PS.bits.Z == d.Z); // got correct Z bit?
+        if (flags) {
+            testing.expect(cpu.PS.bits.N == d.N); // got correct N bit?
+            testing.expect(cpu.PS.bits.Z == d.Z); // got correct Z bit?
+        } else {
+            testing.expect(cpu.PS.bits.N == prevPS.bits.N);
+            testing.expect(cpu.PS.bits.Z == prevPS.bits.Z);
+        }
 
         // other bits didn't change?
-        testing.expect(cpu.PS.bits.C == prevP.bits.C);
-        testing.expect(cpu.PS.bits.I == prevP.bits.I);
-        testing.expect(cpu.PS.bits.D == prevP.bits.D);
-        testing.expect(cpu.PS.bits.B == prevP.bits.B);
-        testing.expect(cpu.PS.bits.V == prevP.bits.V);
+        testing.expect(cpu.PS.bits.C == prevPS.bits.C);
+        testing.expect(cpu.PS.bits.I == prevPS.bits.I);
+        testing.expect(cpu.PS.bits.D == prevPS.bits.D);
+        testing.expect(cpu.PS.bits.B == prevPS.bits.B);
+        testing.expect(cpu.PS.bits.V == prevPS.bits.V);
 
         // registers either got set or didn't change?
         testing.expect(target == CPU.A or cpu.regs[CPU.A] == prevRegs[CPU.A]);
@@ -401,6 +440,89 @@ fn test_transfer_register(cpu: *CPU, source: usize, target: usize, ticks: u32) v
         testing.expect(target == CPU.Y or cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
         testing.expect(target == CPU.SP or cpu.regs[CPU.SP] == prevRegs[CPU.SP]);
     }
+}
+
+fn test_push_register(cpu: *CPU, location: *Type.Byte, ticks: u32) void {
+    const Data = struct {
+        v: Type.Byte,
+    };
+    const data = [_]Data{
+        .{ .v = 0x11 },
+        .{ .v = 0xF0 },
+        .{ .v = 0x00 },
+    };
+    for (data) |d| {
+        cpu.PC = TEST_ADDRESS;
+        cpu.PS.byte = 0; // set PS to 0
+        location.* = d.v; // put value in register
+        const prevPS = cpu.PS; // remember PS
+        const prevRegs = cpu.regs; // remember registers
+        const used = cpu.run(ticks);
+
+        testing.expect(used == ticks);
+        testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP] - 1); // did SP move?
+        const address = @as(Type.Word, CPU.STACK_BASE) + prevRegs[CPU.SP];
+        testing.expect(cpu.memory.data[address] == d.v); // did the value get pushed?
+
+        // none of the bits changed?
+        testing.expect(cpu.PS.byte == prevPS.byte);
+
+        // registers didn't change?
+        testing.expect(cpu.regs[CPU.A] == prevRegs[CPU.A]);
+        testing.expect(cpu.regs[CPU.X] == prevRegs[CPU.X]);
+        testing.expect(cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
+    }
+}
+
+fn test_pop_register(cpu: *CPU, location: *Type.Byte, ticks: u32) void {
+    const Data = struct {
+        v: Type.Byte,
+        N: Type.Bit,
+        Z: Type.Bit,
+    };
+    const data = [_]Data{
+        .{ .v = 0x11, .N = 0, .Z = 0 },
+        .{ .v = 0xF0, .N = 1, .Z = 0 },
+        .{ .v = 0x00, .N = 0, .Z = 1 },
+    };
+    var SP: Type.Byte = 0xFF;
+    for (data) |d| {
+        const address = @as(Type.Word, CPU.STACK_BASE) + SP;
+        cpu.memory.data[address] = d.v; // set value in stack
+        SP -%= 1;
+    }
+    cpu.regs[CPU.SP] = SP;
+    for (data) |d, p| {
+        const pos = data.len - 1 - p;
+        cpu.PC = TEST_ADDRESS;
+        cpu.PS.byte = 0; // set PS to 0
+        location.* = 0;
+        const prevPS = cpu.PS; // remember PS
+        const prevRegs = cpu.regs; // remember registers
+        const used = cpu.run(ticks);
+
+        testing.expect(used == ticks);
+        testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP] + 1); // did SP move?
+        const address = @as(Type.Word, CPU.STACK_BASE) + prevRegs[CPU.SP];
+        testing.expect(location.* == data[pos].v); // did the value get popped?
+
+        if (location == &cpu.regs[CPU.A]) {
+            testing.expect(cpu.PS.bits.N == data[pos].N); // got correct N bit?
+            testing.expect(cpu.PS.bits.Z == data[pos].Z); // got correct Z bit?
+            // other bits didn't change?
+            testing.expect(cpu.PS.bits.C == prevPS.bits.C);
+            testing.expect(cpu.PS.bits.I == prevPS.bits.I);
+            testing.expect(cpu.PS.bits.D == prevPS.bits.D);
+            testing.expect(cpu.PS.bits.B == prevPS.bits.B);
+            testing.expect(cpu.PS.bits.V == prevPS.bits.V);
+        }
+
+        // registers didn't change?
+        testing.expect(location == &cpu.regs[CPU.A] or cpu.regs[CPU.A] == prevRegs[CPU.A]);
+        testing.expect(cpu.regs[CPU.X] == prevRegs[CPU.X]);
+        testing.expect(cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
+    }
+    testing.expect(cpu.regs[CPU.SP] == 0xFF);
 }
 
 // LDA tests
@@ -784,28 +906,74 @@ test "run TAX" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0xAA;
-    test_transfer_register(&cpu, CPU.A, CPU.X, 2);
+    test_transfer_register(&cpu, CPU.A, CPU.X, true, 2);
 }
 
 test "run TAY" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0xA8;
-    test_transfer_register(&cpu, CPU.A, CPU.Y, 2);
+    test_transfer_register(&cpu, CPU.A, CPU.Y, true, 2);
 }
 
 test "run TXA" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0x8A;
-    test_transfer_register(&cpu, CPU.X, CPU.A, 2);
+    test_transfer_register(&cpu, CPU.X, CPU.A, true, 2);
 }
 
 test "run TYA" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0x98;
-    test_transfer_register(&cpu, CPU.Y, CPU.A, 2);
+    test_transfer_register(&cpu, CPU.Y, CPU.A, true, 2);
+}
+
+test "run TSX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xBA;
+    test_transfer_register(&cpu, CPU.SP, CPU.X, true, 2);
+}
+
+test "run TXS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x9A;
+    test_transfer_register(&cpu, CPU.X, CPU.SP, false, 2);
+}
+
+// push
+
+test "run PHA" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x48;
+    test_push_register(&cpu, &cpu.regs[CPU.A], 3);
+}
+
+test "run PHP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x08;
+    test_push_register(&cpu, &cpu.PS.byte, 3);
+}
+
+// pop
+
+test "run PLA" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x68;
+    test_pop_register(&cpu, &cpu.regs[CPU.A], 4);
+}
+
+test "run PLP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x28;
+    test_pop_register(&cpu, &cpu.PS.byte, 4);
 }
 
 // NOP tests
