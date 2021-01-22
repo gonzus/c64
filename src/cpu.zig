@@ -75,7 +75,7 @@ pub const CPU = struct {
     pub fn run(self: *CPU, limit: u32) u32 {
         const start = self.ticks;
         while ((self.ticks - start) < limit) {
-            const op = @intToEnum(OP, self.read(self.PC));
+            const op = @intToEnum(OP, self.readByte(self.PC));
             self.PC += 1;
             switch (op) {
                 OP.LDA_IMM => {
@@ -113,91 +113,83 @@ pub const CPU = struct {
     fn fetch(self: *CPU, mode: AddressingMode, register: usize) void {
         const fetched = switch (mode) {
             .Immediate => blk: {
-                const value = self.read(self.PC);
+                const value = self.readByte(self.PC);
                 self.PC += 1;
                 break :blk value;
             },
             .ZeroPage => blk: {
-                const address = @as(Type.Word, self.read(self.PC));
+                const address = @as(Type.Word, self.readByte(self.PC));
                 self.PC += 1;
-                break :blk self.read(address);
+                break :blk self.readByte(address);
             },
             .ZeroPageX => blk: {
-                var address = @as(Type.Word, self.read(self.PC));
+                var address = @as(Type.Word, self.readByte(self.PC));
                 self.PC += 1;
                 address +%= self.regs[X];
                 self.tick();
-                break :blk self.read(address);
+                break :blk self.readByte(address);
             },
             .ZeroPageY => blk: {
-                var address = @as(Type.Word, self.read(self.PC));
+                var address = @as(Type.Word, self.readByte(self.PC));
                 self.PC += 1;
                 address +%= self.regs[Y];
                 self.tick();
-                break :blk self.read(address);
+                break :blk self.readByte(address);
             },
             .Absolute => blk: {
-                const lo = @as(Type.Word, self.read(self.PC)) << 0;
-                self.PC += 1;
-                const hi = @as(Type.Word, self.read(self.PC)) << 8;
-                self.PC += 1;
-                const address = hi | lo;
-                break :blk self.read(address);
+                const address = self.readWord(self.PC);
+                self.PC += 2;
+                break :blk self.readByte(address);
             },
             .AbsoluteX => blk: {
-                const lo = @as(Type.Word, self.read(self.PC)) << 0;
-                self.PC += 1;
-                const hi = @as(Type.Word, self.read(self.PC)) << 8;
-                self.PC += 1;
-                const initial = hi | lo;
+                const initial = self.readWord(self.PC);
                 const final = initial + self.regs[X];
                 if (!samePage(initial, final)) {
                     self.tick();
                 }
-                break :blk self.read(final);
+                break :blk self.readByte(final);
             },
             .AbsoluteY => blk: {
-                const lo = @as(Type.Word, self.read(self.PC)) << 0;
-                self.PC += 1;
-                const hi = @as(Type.Word, self.read(self.PC)) << 8;
-                self.PC += 1;
-                const initial = hi | lo;
+                const initial = self.readWord(self.PC);
                 const final = initial + self.regs[Y];
                 if (!samePage(initial, final)) {
                     self.tick();
                 }
-                break :blk self.read(final);
+                break :blk self.readByte(final);
             },
             .IndexedIndirect => blk: {
-                var address = @as(Type.Word, self.read(self.PC));
+                var address = @as(Type.Word, self.readByte(self.PC));
                 self.PC += 1;
                 address +%= self.regs[X];
                 self.tick();
-                const lo = @as(Type.Word, self.read(address + 0)) << 0;
-                const hi = @as(Type.Word, self.read(address + 1)) << 8;
-                const final = hi | lo;
-                break :blk self.read(final);
+                const final = self.readWord(address);
+                break :blk self.readByte(final);
             },
             .IndirectIndexed => blk: {
-                const address = @as(Type.Word, self.read(self.PC));
+                const address = @as(Type.Word, self.readByte(self.PC));
                 self.PC += 1;
-                const lo = @as(Type.Word, self.read(address + 0)) << 0;
-                const hi = @as(Type.Word, self.read(address + 1)) << 8;
-                const initial = hi | lo;
+                const initial = self.readWord(address);
                 const final = initial + self.regs[Y];
                 if (!samePage(initial, final)) {
                     self.tick();
                 }
-                break :blk self.read(final);
+                break :blk self.readByte(final);
             },
         };
         self.setNZ(fetched);
         self.regs[register] = fetched;
     }
 
-    fn read(self: *CPU, address: Type.Word) Type.Byte {
+    fn readByte(self: *CPU, address: Type.Word) Type.Byte {
         const value = self.memory.data[address];
         self.tick();
+        return value;
+    }
+
+    fn readWord(self: *CPU, address: Type.Word) Type.Word {
+        const lo = @as(Type.Word, self.readByte(address + 0));
+        const hi = @as(Type.Word, self.readByte(address + 1)) << 8;
+        const value = hi | lo;
         return value;
     }
 
@@ -211,7 +203,7 @@ pub const CPU = struct {
     }
 
     fn samePage(p1: Type.Word, p2: Type.Word) bool {
-        // It seems adding something to an address will incur in an extra tick
+        // Sometimes adding something to an address will incur in an extra tick
         // ONLY when that caused the address to cross onto another page.
         return (p1 & 0xFF00) == (p2 & 0xFF00);
     }
