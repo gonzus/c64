@@ -79,28 +79,28 @@ pub const CPU = struct {
             self.PC += 1;
             switch (op) {
                 OP.LDA_IMM => {
-                    self.fetch(.Immediate, A);
+                    self.fetch(A, .Immediate);
                 },
                 OP.LDA_ZP => {
-                    self.fetch(.ZeroPage, A);
+                    self.fetch(A, .ZeroPage);
                 },
                 OP.LDA_ZPX => {
-                    self.fetch(.ZeroPageX, A);
+                    self.fetch(A, .ZeroPageX);
                 },
                 OP.LDA_ABS => {
-                    self.fetch(.Absolute, A);
+                    self.fetch(A, .Absolute);
                 },
                 OP.LDA_ABSX => {
-                    self.fetch(.AbsoluteX, A);
+                    self.fetch(A, .AbsoluteX);
                 },
                 OP.LDA_ABSY => {
-                    self.fetch(.AbsoluteY, A);
+                    self.fetch(A, .AbsoluteY);
                 },
                 OP.LDA_XR => {
-                    self.fetch(.IndexedIndirect, A);
+                    self.fetch(A, .IndexedIndirect);
                 },
                 OP.LDA_RX => {
-                    self.fetch(.IndirectIndexed, A);
+                    self.fetch(A, .IndirectIndexed);
                 },
                 OP.NOP => {
                     self.tick();
@@ -110,36 +110,43 @@ pub const CPU = struct {
         return self.ticks - start;
     }
 
-    fn fetch(self: *CPU, mode: AddressingMode, register: usize) void {
-        const fetched = switch (mode) {
+    fn fetch(self: *CPU, register: usize, mode: AddressingMode) void {
+        const address = self.computeAddress(mode);
+        const value = self.readByte(address);
+        self.setNZ(value);
+        self.regs[register] = value;
+    }
+
+    fn computeAddress(self: *CPU, mode: AddressingMode) Type.Word {
+        const address = switch (mode) {
             .Immediate => blk: {
-                const value = self.readByte(self.PC);
+                const address = self.PC;
                 self.PC += 1;
-                break :blk value;
+                break :blk address;
             },
             .ZeroPage => blk: {
                 const address = @as(Type.Word, self.readByte(self.PC));
                 self.PC += 1;
-                break :blk self.readByte(address);
+                break :blk address;
             },
             .ZeroPageX => blk: {
                 var address = @as(Type.Word, self.readByte(self.PC));
                 self.PC += 1;
                 address +%= self.regs[X];
                 self.tick();
-                break :blk self.readByte(address);
+                break :blk address;
             },
             .ZeroPageY => blk: {
                 var address = @as(Type.Word, self.readByte(self.PC));
                 self.PC += 1;
                 address +%= self.regs[Y];
                 self.tick();
-                break :blk self.readByte(address);
+                break :blk address;
             },
             .Absolute => blk: {
                 const address = self.readWord(self.PC);
                 self.PC += 2;
-                break :blk self.readByte(address);
+                break :blk address;
             },
             .AbsoluteX => blk: {
                 const initial = self.readWord(self.PC);
@@ -147,7 +154,7 @@ pub const CPU = struct {
                 if (!samePage(initial, final)) {
                     self.tick();
                 }
-                break :blk self.readByte(final);
+                break :blk final;
             },
             .AbsoluteY => blk: {
                 const initial = self.readWord(self.PC);
@@ -155,7 +162,7 @@ pub const CPU = struct {
                 if (!samePage(initial, final)) {
                     self.tick();
                 }
-                break :blk self.readByte(final);
+                break :blk final;
             },
             .IndexedIndirect => blk: {
                 var address = @as(Type.Word, self.readByte(self.PC));
@@ -163,7 +170,7 @@ pub const CPU = struct {
                 address +%= self.regs[X];
                 self.tick();
                 const final = self.readWord(address);
-                break :blk self.readByte(final);
+                break :blk final;
             },
             .IndirectIndexed => blk: {
                 const address = @as(Type.Word, self.readByte(self.PC));
@@ -173,11 +180,10 @@ pub const CPU = struct {
                 if (!samePage(initial, final)) {
                     self.tick();
                 }
-                break :blk self.readByte(final);
+                break :blk final;
             },
         };
-        self.setNZ(fetched);
-        self.regs[register] = fetched;
+        return address;
     }
 
     fn readByte(self: *CPU, address: Type.Word) Type.Byte {
