@@ -58,6 +58,14 @@ pub const CPU = struct {
         LDY_ABS = 0xAC,
         LDY_ABSX = 0xBC,
 
+        STA_ZP = 0x85,
+        STA_ZPX = 0x95,
+        STA_ABS = 0x8D,
+        STA_ABSX = 0x9D,
+        STA_ABSY = 0x99,
+        STA_XR = 0x81,
+        STA_RX = 0x91,
+
         NOP = 0xEA,
     };
 
@@ -111,6 +119,14 @@ pub const CPU = struct {
                 OP.LDY_ABS => self.fetch(Y, .Absolute),
                 OP.LDY_ABSX => self.fetch(Y, .AbsoluteX),
 
+                OP.STA_ZP => self.store(A, .ZeroPage),
+                OP.STA_ZPX => self.store(A, .ZeroPageX),
+                OP.STA_ABS => self.store(A, .Absolute),
+                OP.STA_ABSX => self.store(A, .AbsoluteX),
+                OP.STA_ABSY => self.store(A, .AbsoluteY),
+                OP.STA_XR => self.store(A, .IndexedIndirect),
+                OP.STA_RX => self.store(A, .IndirectIndexed),
+
                 OP.NOP => self.tick(),
             }
         }
@@ -122,6 +138,11 @@ pub const CPU = struct {
         const value = self.readByte(address);
         self.setNZ(value);
         self.regs[register] = value;
+    }
+
+    fn store(self: *CPU, register: usize, mode: AddressingMode) void {
+        const address = self.computeAddress(mode);
+        self.writeByte(address, self.regs[register]);
     }
 
     fn computeAddress(self: *CPU, mode: AddressingMode) Type.Word {
@@ -206,6 +227,11 @@ pub const CPU = struct {
         return value;
     }
 
+    fn writeByte(self: *CPU, address: Type.Word, value: Type.Byte) void {
+        self.memory.data[address] = value;
+        self.tick();
+    }
+
     fn tick(self: *CPU) void {
         self.ticks += 1;
     }
@@ -221,6 +247,8 @@ pub const CPU = struct {
         return (p1 & 0xFF00) == (p2 & 0xFF00);
     }
 };
+
+// =========================================================
 
 const TEST_ADDRESS = 0x4433;
 
@@ -244,20 +272,26 @@ fn test_load_register(cpu: *CPU, register: usize, address: Type.Word, ticks: u32
     };
     for (data) |d| {
         cpu.PC = TEST_ADDRESS;
-        cpu.memory.data[address] = d.v;
-        const prevP = cpu.PS;
-        const prevRegs = cpu.regs;
-        cpu.PS.byte = 0;
+        cpu.memory.data[address] = d.v; // put value in memory address
+        const prevP = cpu.PS; // remember PS
+        const prevRegs = cpu.regs; // remember registers
+        cpu.regs[register] = 0; // set desired register to 0
+        cpu.PS.byte = 0; // set PS to 0
         const used = cpu.run(ticks);
+
         testing.expect(used == ticks);
-        testing.expect(cpu.regs[register] == d.v);
-        testing.expect(cpu.PS.bits.N == d.N);
-        testing.expect(cpu.PS.bits.Z == d.Z);
+        testing.expect(cpu.regs[register] == d.v); // got correct value in register?
+        testing.expect(cpu.PS.bits.N == d.N); // got correct N bit?
+        testing.expect(cpu.PS.bits.Z == d.Z); // got correct Z bit?
+
+        // other bits didn't change?
         testing.expect(cpu.PS.bits.C == prevP.bits.C);
         testing.expect(cpu.PS.bits.I == prevP.bits.I);
         testing.expect(cpu.PS.bits.D == prevP.bits.D);
         testing.expect(cpu.PS.bits.B == prevP.bits.B);
         testing.expect(cpu.PS.bits.V == prevP.bits.V);
+
+        // registers either got set or didn't change?
         testing.expect(register == CPU.A or cpu.regs[CPU.A] == prevRegs[CPU.A]);
         testing.expect(register == CPU.X or cpu.regs[CPU.X] == prevRegs[CPU.X]);
         testing.expect(register == CPU.Y or cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
@@ -265,7 +299,37 @@ fn test_load_register(cpu: *CPU, register: usize, address: Type.Word, ticks: u32
     }
 }
 
-// =========================================================
+fn test_save_register(cpu: *CPU, register: usize, address: Type.Word, ticks: u32) void {
+    const Data = struct {
+        v: Type.Byte,
+        N: Type.Bit,
+        Z: Type.Bit,
+    };
+    const data = [_]Data{
+        .{ .v = 0x11, .N = 0, .Z = 0 },
+        .{ .v = 0xF0, .N = 1, .Z = 0 },
+        .{ .v = 0x00, .N = 0, .Z = 1 },
+    };
+    for (data) |d| {
+        cpu.PC = TEST_ADDRESS;
+        cpu.regs[register] = d.v; // put value in register
+        const prevP = cpu.PS; // remember PS
+        const prevRegs = cpu.regs; // remember registers
+        cpu.memory.data[address] = 0; // set desired address to 0
+        cpu.PS.byte = 0; // set PS to 0
+        const used = cpu.run(ticks);
+
+        testing.expect(used == ticks);
+        testing.expect(cpu.memory.data[address] == d.v); // got correct value in memory?
+        testing.expect(cpu.PS.byte == prevP.byte); // PS didn't change?
+
+        // registers didn't change?
+        testing.expect(cpu.regs[CPU.A] == prevRegs[CPU.A]);
+        testing.expect(cpu.regs[CPU.X] == prevRegs[CPU.X]);
+        testing.expect(cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
+        testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP]);
+    }
+}
 
 // LDA tests
 
@@ -483,6 +547,108 @@ test "run LDY_ABSX cross page" {
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
     test_load_register(&cpu, CPU.Y, 0x8311 + 0xFE, 5);
+}
+
+// STA tests
+
+test "run STA_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.A] = 0x37;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x85;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_save_register(&cpu, CPU.A, 0x0011, 3);
+}
+
+test "run STA_ZPX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x95;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_save_register(&cpu, CPU.A, 0x0011 + 7, 4);
+}
+
+test "run STA_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x8D;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_save_register(&cpu, CPU.A, 0x8311, 4);
+}
+
+test "run STA_ABSX same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x9D;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_save_register(&cpu, CPU.A, 0x8311 + 7, 4);
+}
+
+test "run STA_ABSY same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x99;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_save_register(&cpu, CPU.A, 0x8311 + 7, 4);
+}
+
+test "run STA_ABSX cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x9D;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_save_register(&cpu, CPU.A, 0x8311 + 0xFE, 5);
+}
+
+test "run STA_ABSY cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x99;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_save_register(&cpu, CPU.A, 0x8311 + 0xFE, 5);
+}
+
+test "run STA_XR" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 4;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x81;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x20;
+    cpu.memory.data[0x20 + 4 + 0] = 0x74;
+    cpu.memory.data[0x20 + 4 + 1] = 0x20;
+    test_save_register(&cpu, CPU.A, 0x2074, 6);
+}
+
+test "run STA_RX same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0x10;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x91;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
+    cpu.memory.data[0x86 + 0] = 0x28;
+    cpu.memory.data[0x86 + 1] = 0x40;
+    test_save_register(&cpu, CPU.A, 0x4028 + 0x10, 5);
+}
+
+test "run STA_RX cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x91;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
+    cpu.memory.data[0x86 + 0] = 0x28;
+    cpu.memory.data[0x86 + 1] = 0x40;
+    test_save_register(&cpu, CPU.A, 0x4028 + 0xFE, 6);
 }
 
 // NOP tests
