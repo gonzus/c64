@@ -66,6 +66,14 @@ pub const CPU = struct {
         STA_XR = 0x81,
         STA_RX = 0x91,
 
+        STX_ZP = 0x86,
+        STX_ZPY = 0x96,
+        STX_ABS = 0x8E,
+
+        STY_ZP = 0x84,
+        STY_ZPX = 0x94,
+        STY_ABS = 0x8C,
+
         NOP = 0xEA,
     };
 
@@ -126,6 +134,14 @@ pub const CPU = struct {
                 OP.STA_ABSY => self.store(A, .AbsoluteY),
                 OP.STA_XR => self.store(A, .IndexedIndirect),
                 OP.STA_RX => self.store(A, .IndirectIndexed),
+
+                OP.STX_ZP => self.store(X, .ZeroPage),
+                OP.STX_ZPY => self.store(X, .ZeroPageY),
+                OP.STX_ABS => self.store(X, .Absolute),
+
+                OP.STY_ZP => self.store(Y, .ZeroPage),
+                OP.STY_ZPX => self.store(Y, .ZeroPageX),
+                OP.STY_ABS => self.store(Y, .Absolute),
 
                 OP.NOP => self.tick(),
             }
@@ -554,7 +570,6 @@ test "run LDY_ABSX cross page" {
 test "run STA_ZP" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
-    cpu.regs[CPU.A] = 0x37;
     cpu.memory.data[TEST_ADDRESS + 0] = 0x85;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     test_save_register(&cpu, CPU.A, 0x0011, 3);
@@ -649,6 +664,62 @@ test "run STA_RX cross page" {
     cpu.memory.data[0x86 + 0] = 0x28;
     cpu.memory.data[0x86 + 1] = 0x40;
     test_save_register(&cpu, CPU.A, 0x4028 + 0xFE, 6);
+}
+
+// STX tests
+
+test "run STX_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x86;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_save_register(&cpu, CPU.X, 0x0011, 3);
+}
+
+test "run STX_ZPY" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x96;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_save_register(&cpu, CPU.X, 0x0011 + 7, 4);
+}
+
+test "run STX_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x8E;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_save_register(&cpu, CPU.X, 0x8311, 4);
+}
+
+// STY tests
+
+test "run STY_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x84;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_save_register(&cpu, CPU.Y, 0x0011, 3);
+}
+
+test "run STY_ZPX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x94;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_save_register(&cpu, CPU.Y, 0x0011 + 7, 4);
+}
+
+test "run STY_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x8C;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_save_register(&cpu, CPU.Y, 0x8311, 4);
 }
 
 // NOP tests
