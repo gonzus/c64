@@ -10,7 +10,7 @@ pub const CPU = struct {
     const INITIAL_ADDRESS = 0xF000;
 
     PC: Type.Word, // Program Counter
-    P: Status, // Processor Status
+    PS: Status, // Processor Status
 
     regs: [4]Type.Byte,
     memory: Memory, // Memory bank with 64 KB -- wow
@@ -52,7 +52,7 @@ pub const CPU = struct {
     pub fn init() CPU {
         var self = CPU{
             .PC = undefined,
-            .P = undefined,
+            .PS = undefined,
             .regs = undefined,
             .memory = undefined,
             .ticks = undefined,
@@ -63,7 +63,7 @@ pub const CPU = struct {
 
     pub fn reset(self: *CPU, address: Type.Word) void {
         self.PC = address;
-        self.P.clear();
+        self.PS.clear();
         self.regs[SP] = 0;
         self.regs[A] = 0;
         self.regs[X] = 0;
@@ -206,8 +206,8 @@ pub const CPU = struct {
     }
 
     fn setNZ(self: *CPU, value: Type.Word) void {
-        self.P.bits.N = if ((value & 0b10000000) > 0) 1 else 0;
-        self.P.bits.Z = if ((value | 0b00000000) > 0) 0 else 1;
+        self.PS.bits.N = if ((value & 0b10000000) > 0) 1 else 0;
+        self.PS.bits.Z = if ((value | 0b00000000) > 0) 0 else 1;
     }
 
     fn samePage(p1: Type.Word, p2: Type.Word) bool {
@@ -226,7 +226,7 @@ test "create CPU" {
     testing.expect(cpu.PC == TEST_ADDRESS);
 }
 
-fn test_load_register(cpu: *CPU, address: Type.Word, register: usize, ticks: u32) void {
+fn test_load_register(cpu: *CPU, register: usize, address: Type.Word, ticks: u32) void {
     const Data = struct {
         v: Type.Byte,
         N: Type.Bit,
@@ -240,19 +240,19 @@ fn test_load_register(cpu: *CPU, address: Type.Word, register: usize, ticks: u32
     for (data) |d| {
         cpu.PC = TEST_ADDRESS;
         cpu.memory.data[address] = d.v;
-        const prevP = cpu.P;
+        const prevP = cpu.PS;
         const prevRegs = cpu.regs;
-        cpu.P.byte = 0;
+        cpu.PS.byte = 0;
         const used = cpu.run(ticks);
         testing.expect(used == ticks);
         testing.expect(cpu.regs[register] == d.v);
-        testing.expect(cpu.P.bits.N == d.N);
-        testing.expect(cpu.P.bits.Z == d.Z);
-        testing.expect(cpu.P.bits.C == prevP.bits.C);
-        testing.expect(cpu.P.bits.I == prevP.bits.I);
-        testing.expect(cpu.P.bits.D == prevP.bits.D);
-        testing.expect(cpu.P.bits.B == prevP.bits.B);
-        testing.expect(cpu.P.bits.V == prevP.bits.V);
+        testing.expect(cpu.PS.bits.N == d.N);
+        testing.expect(cpu.PS.bits.Z == d.Z);
+        testing.expect(cpu.PS.bits.C == prevP.bits.C);
+        testing.expect(cpu.PS.bits.I == prevP.bits.I);
+        testing.expect(cpu.PS.bits.D == prevP.bits.D);
+        testing.expect(cpu.PS.bits.B == prevP.bits.B);
+        testing.expect(cpu.PS.bits.V == prevP.bits.V);
         testing.expect(register == CPU.A or cpu.regs[CPU.A] == prevRegs[CPU.A]);
         testing.expect(register == CPU.X or cpu.regs[CPU.X] == prevRegs[CPU.X]);
         testing.expect(register == CPU.Y or cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
@@ -264,7 +264,7 @@ test "run LDA_IMM" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0xA9;
-    test_load_register(&cpu, TEST_ADDRESS + 1, CPU.A, 2);
+    test_load_register(&cpu, CPU.A, TEST_ADDRESS + 1, 2);
 }
 
 test "run LDA_ZP" {
@@ -272,7 +272,7 @@ test "run LDA_ZP" {
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0xA5;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
-    test_load_register(&cpu, 0x0011, CPU.A, 3);
+    test_load_register(&cpu, CPU.A, 0x0011, 3);
 }
 
 test "run LDA_ZPX" {
@@ -281,7 +281,7 @@ test "run LDA_ZPX" {
     cpu.regs[CPU.X] = 7;
     cpu.memory.data[TEST_ADDRESS + 0] = 0xB5;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
-    test_load_register(&cpu, 0x0011 + 7, CPU.A, 4);
+    test_load_register(&cpu, CPU.A, 0x0011 + 7, 4);
 }
 
 test "run LDA_ABS" {
@@ -290,7 +290,7 @@ test "run LDA_ABS" {
     cpu.memory.data[TEST_ADDRESS + 0] = 0xAD;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
-    test_load_register(&cpu, 0x8311, CPU.A, 4);
+    test_load_register(&cpu, CPU.A, 0x8311, 4);
 }
 
 test "run LDA_ABSX same page" {
@@ -300,7 +300,7 @@ test "run LDA_ABSX same page" {
     cpu.memory.data[TEST_ADDRESS + 0] = 0xBD;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
-    test_load_register(&cpu, 0x8311 + 7, CPU.A, 4);
+    test_load_register(&cpu, CPU.A, 0x8311 + 7, 4);
 }
 
 test "run LDA_ABSY same page" {
@@ -310,7 +310,7 @@ test "run LDA_ABSY same page" {
     cpu.memory.data[TEST_ADDRESS + 0] = 0xB9;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
-    test_load_register(&cpu, 0x8311 + 7, CPU.A, 4);
+    test_load_register(&cpu, CPU.A, 0x8311 + 7, 4);
 }
 
 test "run LDA_ABSX cross page" {
@@ -320,7 +320,7 @@ test "run LDA_ABSX cross page" {
     cpu.memory.data[TEST_ADDRESS + 0] = 0xBD;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
-    test_load_register(&cpu, 0x8311 + 0xFE, CPU.A, 5);
+    test_load_register(&cpu, CPU.A, 0x8311 + 0xFE, 5);
 }
 
 test "run LDA_ABSY cross page" {
@@ -330,7 +330,7 @@ test "run LDA_ABSY cross page" {
     cpu.memory.data[TEST_ADDRESS + 0] = 0xB9;
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
-    test_load_register(&cpu, 0x8311 + 0xFE, CPU.A, 5);
+    test_load_register(&cpu, CPU.A, 0x8311 + 0xFE, 5);
 }
 
 test "run LDA_XR" {
@@ -341,7 +341,7 @@ test "run LDA_XR" {
     cpu.memory.data[TEST_ADDRESS + 1] = 0x20;
     cpu.memory.data[0x20 + 4 + 0] = 0x74;
     cpu.memory.data[0x20 + 4 + 1] = 0x20;
-    test_load_register(&cpu, 0x2074, CPU.A, 6);
+    test_load_register(&cpu, CPU.A, 0x2074, 6);
 }
 
 test "run LDA_RX same page" {
@@ -352,7 +352,7 @@ test "run LDA_RX same page" {
     cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
     cpu.memory.data[0x86 + 0] = 0x28;
     cpu.memory.data[0x86 + 1] = 0x40;
-    test_load_register(&cpu, 0x4028 + 0x10, CPU.A, 5);
+    test_load_register(&cpu, CPU.A, 0x4028 + 0x10, 5);
 }
 
 test "run LDA_RX cross page" {
@@ -363,7 +363,7 @@ test "run LDA_RX cross page" {
     cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
     cpu.memory.data[0x86 + 0] = 0x28;
     cpu.memory.data[0x86 + 1] = 0x40;
-    test_load_register(&cpu, 0x4028 + 0xFE, CPU.A, 6);
+    test_load_register(&cpu, CPU.A, 0x4028 + 0xFE, 6);
 }
 
 test "run NOP" {
