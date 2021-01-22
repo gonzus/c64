@@ -74,6 +74,11 @@ pub const CPU = struct {
         STY_ZPX = 0x94,
         STY_ABS = 0x8C,
 
+        TAX = 0xAA,
+        TAY = 0xA8,
+        TXA = 0x8A,
+        TYA = 0x98,
+
         NOP = 0xEA,
     };
 
@@ -143,6 +148,11 @@ pub const CPU = struct {
                 OP.STY_ZPX => self.store(Y, .ZeroPageX),
                 OP.STY_ABS => self.store(Y, .Absolute),
 
+                OP.TAX => self.transfer(A, X),
+                OP.TAY => self.transfer(A, Y),
+                OP.TXA => self.transfer(X, A),
+                OP.TYA => self.transfer(Y, A),
+
                 OP.NOP => self.tick(),
             }
         }
@@ -152,13 +162,19 @@ pub const CPU = struct {
     fn fetch(self: *CPU, register: usize, mode: AddressingMode) void {
         const address = self.computeAddress(mode);
         const value = self.readByte(address);
-        self.setNZ(value);
         self.regs[register] = value;
+        self.setNZ(self.regs[register]);
     }
 
     fn store(self: *CPU, register: usize, mode: AddressingMode) void {
         const address = self.computeAddress(mode);
         self.writeByte(address, self.regs[register]);
+    }
+
+    fn transfer(self: *CPU, source: usize, target: usize) void {
+        self.regs[target] = self.regs[source];
+        self.setNZ(self.regs[target]);
+        self.tick();
     }
 
     fn computeAddress(self: *CPU, mode: AddressingMode) Type.Word {
@@ -344,6 +360,46 @@ fn test_save_register(cpu: *CPU, register: usize, address: Type.Word, ticks: u32
         testing.expect(cpu.regs[CPU.X] == prevRegs[CPU.X]);
         testing.expect(cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
         testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP]);
+    }
+}
+
+fn test_transfer_register(cpu: *CPU, source: usize, target: usize, ticks: u32) void {
+    const Data = struct {
+        v: Type.Byte,
+        N: Type.Bit,
+        Z: Type.Bit,
+    };
+    const data = [_]Data{
+        .{ .v = 0x11, .N = 0, .Z = 0 },
+        .{ .v = 0xF0, .N = 1, .Z = 0 },
+        .{ .v = 0x00, .N = 0, .Z = 1 },
+    };
+    for (data) |d| {
+        cpu.PC = TEST_ADDRESS;
+        cpu.regs[source] = d.v; // put value in source register
+        const prevP = cpu.PS; // remember PS
+        const prevRegs = cpu.regs; // remember registers
+        cpu.regs[target] = 0; // set target register to 0
+        cpu.PS.byte = 0; // set PS to 0
+        const used = cpu.run(ticks);
+
+        testing.expect(used == ticks);
+        testing.expect(cpu.regs[target] == d.v); // got correct value in target registry?
+        testing.expect(cpu.PS.bits.N == d.N); // got correct N bit?
+        testing.expect(cpu.PS.bits.Z == d.Z); // got correct Z bit?
+
+        // other bits didn't change?
+        testing.expect(cpu.PS.bits.C == prevP.bits.C);
+        testing.expect(cpu.PS.bits.I == prevP.bits.I);
+        testing.expect(cpu.PS.bits.D == prevP.bits.D);
+        testing.expect(cpu.PS.bits.B == prevP.bits.B);
+        testing.expect(cpu.PS.bits.V == prevP.bits.V);
+
+        // registers either got set or didn't change?
+        testing.expect(target == CPU.A or cpu.regs[CPU.A] == prevRegs[CPU.A]);
+        testing.expect(target == CPU.X or cpu.regs[CPU.X] == prevRegs[CPU.X]);
+        testing.expect(target == CPU.Y or cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
+        testing.expect(target == CPU.SP or cpu.regs[CPU.SP] == prevRegs[CPU.SP]);
     }
 }
 
@@ -720,6 +776,36 @@ test "run STY_ABS" {
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
     test_save_register(&cpu, CPU.Y, 0x8311, 4);
+}
+
+// TRANSFER tests
+
+test "run TAX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xAA;
+    test_transfer_register(&cpu, CPU.A, CPU.X, 2);
+}
+
+test "run TAY" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xA8;
+    test_transfer_register(&cpu, CPU.A, CPU.Y, 2);
+}
+
+test "run TXA" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x8A;
+    test_transfer_register(&cpu, CPU.X, CPU.A, 2);
+}
+
+test "run TYA" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x98;
+    test_transfer_register(&cpu, CPU.Y, CPU.A, 2);
 }
 
 // NOP tests
