@@ -25,6 +25,13 @@ pub const CPU = struct {
     const Y = 2;
     const SP = 3;
 
+    const BitOp = enum {
+        And,
+        InclusiveOr,
+        ExclusiveOr,
+        Bit,
+    };
+
     const AddressingMode = enum {
         Immediate,
         ZeroPage,
@@ -33,8 +40,8 @@ pub const CPU = struct {
         Absolute,
         AbsoluteX,
         AbsoluteY,
-        IndexedIndirect,
-        IndirectIndexed,
+        IndirectX,
+        IndirectY,
     };
 
     const OP = enum(Type.Byte) {
@@ -44,8 +51,8 @@ pub const CPU = struct {
         LDA_ABS = 0xAD,
         LDA_ABSX = 0xBD,
         LDA_ABSY = 0xB9,
-        LDA_XR = 0xA1,
-        LDA_RX = 0xB1,
+        LDA_INDX = 0xA1,
+        LDA_INDY = 0xB1,
 
         LDX_IMM = 0xA2,
         LDX_ZP = 0xA6,
@@ -64,8 +71,8 @@ pub const CPU = struct {
         STA_ABS = 0x8D,
         STA_ABSX = 0x9D,
         STA_ABSY = 0x99,
-        STA_XR = 0x81,
-        STA_RX = 0x91,
+        STA_INDX = 0x81,
+        STA_INDY = 0x91,
 
         STX_ZP = 0x86,
         STX_ZPY = 0x96,
@@ -86,6 +93,36 @@ pub const CPU = struct {
         PHP = 0x08,
         PLA = 0x68,
         PLP = 0x28,
+
+        AND_IMM = 0x29,
+        AND_ZP = 0x25,
+        AND_ZPX = 0x35,
+        AND_ABS = 0x2D,
+        AND_ABSX = 0x3D,
+        AND_ABSY = 0x39,
+        AND_INDX = 0x21,
+        AND_INDY = 0x31,
+
+        EOR_IMM = 0x49,
+        EOR_ZP = 0x45,
+        EOR_ZPX = 0x55,
+        EOR_ABS = 0x4D,
+        EOR_ABSX = 0x5D,
+        EOR_ABSY = 0x59,
+        EOR_INDX = 0x41,
+        EOR_INDY = 0x51,
+
+        ORA_IMM = 0x09,
+        ORA_ZP = 0x05,
+        ORA_ZPX = 0x15,
+        ORA_ABS = 0x0D,
+        ORA_ABSX = 0x1D,
+        ORA_ABSY = 0x19,
+        ORA_INDX = 0x01,
+        ORA_INDY = 0x11,
+
+        BIT_ZP = 0x24,
+        BIT_ABS = 0x2C,
 
         NOP = 0xEA,
     };
@@ -125,8 +162,8 @@ pub const CPU = struct {
                 OP.LDA_ABS => self.fetch(A, .Absolute),
                 OP.LDA_ABSX => self.fetch(A, .AbsoluteX),
                 OP.LDA_ABSY => self.fetch(A, .AbsoluteY),
-                OP.LDA_XR => self.fetch(A, .IndexedIndirect),
-                OP.LDA_RX => self.fetch(A, .IndirectIndexed),
+                OP.LDA_INDX => self.fetch(A, .IndirectX),
+                OP.LDA_INDY => self.fetch(A, .IndirectY),
 
                 OP.LDX_IMM => self.fetch(X, .Immediate),
                 OP.LDX_ZP => self.fetch(X, .ZeroPage),
@@ -145,8 +182,8 @@ pub const CPU = struct {
                 OP.STA_ABS => self.store(A, .Absolute),
                 OP.STA_ABSX => self.store(A, .AbsoluteX),
                 OP.STA_ABSY => self.store(A, .AbsoluteY),
-                OP.STA_XR => self.store(A, .IndexedIndirect),
-                OP.STA_RX => self.store(A, .IndirectIndexed),
+                OP.STA_INDX => self.store(A, .IndirectX),
+                OP.STA_INDY => self.store(A, .IndirectY),
 
                 OP.STX_ZP => self.store(X, .ZeroPage),
                 OP.STX_ZPY => self.store(X, .ZeroPageY),
@@ -167,6 +204,36 @@ pub const CPU = struct {
                 OP.PHP => self.push(self.PS.byte),
                 OP.PLA => self.regs[A] = self.pop(true),
                 OP.PLP => self.PS.byte = self.pop(false),
+
+                OP.AND_IMM => self.bitOp(.And, A, .Immediate),
+                OP.AND_ZP => self.bitOp(.And, A, .ZeroPage),
+                OP.AND_ZPX => self.bitOp(.And, A, .ZeroPageX),
+                OP.AND_ABS => self.bitOp(.And, A, .Absolute),
+                OP.AND_ABSX => self.bitOp(.And, A, .AbsoluteX),
+                OP.AND_ABSY => self.bitOp(.And, A, .AbsoluteY),
+                OP.AND_INDX => self.bitOp(.And, A, .IndirectX),
+                OP.AND_INDY => self.bitOp(.And, A, .IndirectY),
+
+                OP.EOR_IMM => self.bitOp(.ExclusiveOr, A, .Immediate),
+                OP.EOR_ZP => self.bitOp(.ExclusiveOr, A, .ZeroPage),
+                OP.EOR_ZPX => self.bitOp(.ExclusiveOr, A, .ZeroPageX),
+                OP.EOR_ABS => self.bitOp(.ExclusiveOr, A, .Absolute),
+                OP.EOR_ABSX => self.bitOp(.ExclusiveOr, A, .AbsoluteX),
+                OP.EOR_ABSY => self.bitOp(.ExclusiveOr, A, .AbsoluteY),
+                OP.EOR_INDX => self.bitOp(.ExclusiveOr, A, .IndirectX),
+                OP.EOR_INDY => self.bitOp(.ExclusiveOr, A, .IndirectY),
+
+                OP.ORA_IMM => self.bitOp(.InclusiveOr, A, .Immediate),
+                OP.ORA_ZP => self.bitOp(.InclusiveOr, A, .ZeroPage),
+                OP.ORA_ZPX => self.bitOp(.InclusiveOr, A, .ZeroPageX),
+                OP.ORA_ABS => self.bitOp(.InclusiveOr, A, .Absolute),
+                OP.ORA_ABSX => self.bitOp(.InclusiveOr, A, .AbsoluteX),
+                OP.ORA_ABSY => self.bitOp(.InclusiveOr, A, .AbsoluteY),
+                OP.ORA_INDX => self.bitOp(.InclusiveOr, A, .IndirectX),
+                OP.ORA_INDY => self.bitOp(.InclusiveOr, A, .IndirectY),
+
+                OP.BIT_ZP => self.bitOp(.Bit, A, .ZeroPage),
+                OP.BIT_ABS => self.bitOp(.Bit, A, .Absolute),
 
                 OP.NOP => self.tick(),
             }
@@ -211,6 +278,22 @@ pub const CPU = struct {
             self.setNZ(value);
         }
         return value;
+    }
+
+    fn bitOp(self: *CPU, op: BitOp, register: usize, mode: AddressingMode) void {
+        const address = self.computeAddress(mode);
+        const value = self.readByte(address);
+        const result = switch (op) {
+            .And, .Bit => self.regs[register] & value,
+            .InclusiveOr => self.regs[register] | value,
+            .ExclusiveOr => self.regs[register] ^ value,
+        };
+        self.setNZ(result);
+        if (op == .Bit) {
+            self.PS.bits.V = if ((result & 0b01000000) > 0) 1 else 0;
+        } else {
+            self.regs[register] = result;
+        }
     }
 
     fn computeAddress(self: *CPU, mode: AddressingMode) Type.Word {
@@ -260,7 +343,7 @@ pub const CPU = struct {
                 }
                 break :blk final;
             },
-            .IndexedIndirect => blk: {
+            .IndirectX => blk: {
                 var address = @as(Type.Word, self.readByte(self.PC));
                 self.PC += 1;
                 address +%= self.regs[X];
@@ -268,7 +351,7 @@ pub const CPU = struct {
                 const final = self.readWord(address);
                 break :blk final;
             },
-            .IndirectIndexed => blk: {
+            .IndirectY => blk: {
                 const address = @as(Type.Word, self.readByte(self.PC));
                 self.PC += 1;
                 const initial = self.readWord(address);
@@ -525,6 +608,68 @@ fn test_pop_register(cpu: *CPU, location: *Type.Byte, ticks: u32) void {
     testing.expect(cpu.regs[CPU.SP] == 0xFF);
 }
 
+fn test_bitop_register(cpu: *CPU, op: CPU.BitOp, register: usize, address: Type.Word, ticks: u32) void {
+    const Data = struct {
+        m: Type.Byte,
+        r: Type.Byte,
+    };
+    const data = [_]Data{
+        .{
+            .m = 0b00110001,
+            .r = 0b10101010,
+        },
+        .{
+            .m = 0b01010101,
+            .r = 0b10101010,
+        },
+        .{
+            .m = 0b10110011,
+            .r = 0b10101010,
+        },
+    };
+    for (data) |d| {
+        cpu.PC = TEST_ADDRESS;
+        cpu.memory.data[address] = d.m; // put value in memory address
+        const prevPS = cpu.PS; // remember PS
+        const prevRegs = cpu.regs; // remember registers
+        cpu.regs[register] = d.r; // set desired register
+        cpu.PS.byte = 0; // set PS to 0
+
+        const afterR: Type.Byte = switch (op) {
+            .And, .Bit => d.m & d.r,
+            .InclusiveOr => d.m | d.r,
+            .ExclusiveOr => d.m ^ d.r,
+        };
+        const afterN: Type.Bit = if ((afterR & 0b10000000) > 0) 1 else 0;
+        const afterV: Type.Bit = if ((afterR & 0b01000000) > 0) 1 else 0;
+        const afterZ: Type.Bit = if ((afterR | 0b00000000) > 0) 0 else 1;
+
+        const used = cpu.run(ticks);
+        testing.expect(used == ticks);
+
+        if (op == .Bit) {
+            testing.expect(cpu.PS.bits.V == afterV); // got correct N bit?
+        } else {
+            testing.expect(cpu.regs[register] == afterR); // got correct after value in register?
+        }
+        testing.expect(cpu.PS.bits.N == afterN); // got correct N bit?
+        testing.expect(cpu.PS.bits.Z == afterZ); // got correct Z bit?
+
+        // other bits didn't change?
+        testing.expect(cpu.PS.bits.C == prevPS.bits.C);
+        testing.expect(cpu.PS.bits.I == prevPS.bits.I);
+        testing.expect(cpu.PS.bits.D == prevPS.bits.D);
+        testing.expect(cpu.PS.bits.B == prevPS.bits.B);
+        testing.expect(cpu.PS.bits.V == prevPS.bits.V);
+
+        // registers either got set or didn't change?
+        testing.expect(register == CPU.A or cpu.regs[CPU.A] == prevRegs[CPU.A]);
+        testing.expect(register == CPU.X or cpu.regs[CPU.X] == prevRegs[CPU.X]);
+        testing.expect(register == CPU.Y or cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
+        testing.expect(register == CPU.SP or cpu.regs[CPU.SP] == prevRegs[CPU.SP]);
+    }
+}
+
 // LDA tests
 
 test "run LDA_IMM" {
@@ -600,7 +745,7 @@ test "run LDA_ABSY cross page" {
     test_load_register(&cpu, CPU.A, 0x8311 + 0xFE, 5);
 }
 
-test "run LDA_XR" {
+test "run LDA_INDX" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.regs[CPU.X] = 4;
@@ -611,7 +756,7 @@ test "run LDA_XR" {
     test_load_register(&cpu, CPU.A, 0x2074, 6);
 }
 
-test "run LDA_RX same page" {
+test "run LDA_INDY same page" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.regs[CPU.Y] = 0x10;
@@ -622,7 +767,7 @@ test "run LDA_RX same page" {
     test_load_register(&cpu, CPU.A, 0x4028 + 0x10, 5);
 }
 
-test "run LDA_RX cross page" {
+test "run LDA_INDY cross page" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.regs[CPU.Y] = 0xFE;
@@ -811,7 +956,7 @@ test "run STA_ABSY cross page" {
     test_save_register(&cpu, CPU.A, 0x8311 + 0xFE, 5);
 }
 
-test "run STA_XR" {
+test "run STA_INDX" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.regs[CPU.X] = 4;
@@ -822,7 +967,7 @@ test "run STA_XR" {
     test_save_register(&cpu, CPU.A, 0x2074, 6);
 }
 
-test "run STA_RX same page" {
+test "run STA_INDY same page" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.regs[CPU.Y] = 0x10;
@@ -833,7 +978,7 @@ test "run STA_RX same page" {
     test_save_register(&cpu, CPU.A, 0x4028 + 0x10, 5);
 }
 
-test "run STA_RX cross page" {
+test "run STA_INDY cross page" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.regs[CPU.Y] = 0xFE;
@@ -974,6 +1119,349 @@ test "run PLP" {
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0x28;
     test_pop_register(&cpu, &cpu.PS.byte, 4);
+}
+
+// AND tests
+
+test "run AND_IMM" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x29;
+    test_bitop_register(&cpu, .And, CPU.A, TEST_ADDRESS + 1, 2);
+}
+
+test "run AND_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x25;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_bitop_register(&cpu, .And, CPU.A, 0x0011, 3);
+}
+
+test "run AND_ZPX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x35;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_bitop_register(&cpu, .And, CPU.A, 0x0011 + 7, 4);
+}
+
+test "run AND_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x2D;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .And, CPU.A, 0x8311, 4);
+}
+
+test "run AND_ABSX same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x3D;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .And, CPU.A, 0x8311 + 7, 4);
+}
+
+test "run AND_ABSY same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x39;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .And, CPU.A, 0x8311 + 7, 4);
+}
+
+test "run AND_ABSX cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x3D;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .And, CPU.A, 0x8311 + 0xFE, 5);
+}
+
+test "run AND_ABSY cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x39;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .And, CPU.A, 0x8311 + 0xFE, 5);
+}
+
+test "run AND_INDX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 4;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x21;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x20;
+    cpu.memory.data[0x20 + 4 + 0] = 0x74;
+    cpu.memory.data[0x20 + 4 + 1] = 0x20;
+    test_bitop_register(&cpu, .And, CPU.A, 0x2074, 6);
+}
+
+test "run AND_INDY same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0x10;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x31;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
+    cpu.memory.data[0x86 + 0] = 0x28;
+    cpu.memory.data[0x86 + 1] = 0x40;
+    test_bitop_register(&cpu, .And, CPU.A, 0x4028 + 0x10, 5);
+}
+
+test "run AND_INDY cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x31;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
+    cpu.memory.data[0x86 + 0] = 0x28;
+    cpu.memory.data[0x86 + 1] = 0x40;
+    test_bitop_register(&cpu, .And, CPU.A, 0x4028 + 0xFE, 6);
+}
+
+// EOR tests
+
+test "run EOR_IMM" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x49;
+    test_bitop_register(&cpu, .ExclusiveOr, CPU.A, TEST_ADDRESS + 1, 2);
+}
+
+test "run EOR_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x45;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_bitop_register(&cpu, .ExclusiveOr, CPU.A, 0x0011, 3);
+}
+
+test "run EOR_ZPX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x55;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_bitop_register(&cpu, .ExclusiveOr, CPU.A, 0x0011 + 7, 4);
+}
+
+test "run EOR_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x4D;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .ExclusiveOr, CPU.A, 0x8311, 4);
+}
+
+test "run EOR_ABSX same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x5D;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .ExclusiveOr, CPU.A, 0x8311 + 7, 4);
+}
+
+test "run EOR_ABSY same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x59;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .ExclusiveOr, CPU.A, 0x8311 + 7, 4);
+}
+
+test "run EOR_ABSX cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x5D;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .ExclusiveOr, CPU.A, 0x8311 + 0xFE, 5);
+}
+
+test "run EOR_ABSY cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x59;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .ExclusiveOr, CPU.A, 0x8311 + 0xFE, 5);
+}
+
+test "run EOR_INDX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 4;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x41;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x20;
+    cpu.memory.data[0x20 + 4 + 0] = 0x74;
+    cpu.memory.data[0x20 + 4 + 1] = 0x20;
+    test_bitop_register(&cpu, .ExclusiveOr, CPU.A, 0x2074, 6);
+}
+
+test "run EOR_INDY same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0x10;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x51;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
+    cpu.memory.data[0x86 + 0] = 0x28;
+    cpu.memory.data[0x86 + 1] = 0x40;
+    test_bitop_register(&cpu, .ExclusiveOr, CPU.A, 0x4028 + 0x10, 5);
+}
+
+test "run EOR_INDY cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x51;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
+    cpu.memory.data[0x86 + 0] = 0x28;
+    cpu.memory.data[0x86 + 1] = 0x40;
+    test_bitop_register(&cpu, .ExclusiveOr, CPU.A, 0x4028 + 0xFE, 6);
+}
+
+// ORA tests
+
+test "run ORA_IMM" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x09;
+    test_bitop_register(&cpu, .InclusiveOr, CPU.A, TEST_ADDRESS + 1, 2);
+}
+
+test "run ORA_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x05;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_bitop_register(&cpu, .InclusiveOr, CPU.A, 0x0011, 3);
+}
+
+test "run ORA_ZPX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x15;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_bitop_register(&cpu, .InclusiveOr, CPU.A, 0x0011 + 7, 4);
+}
+
+test "run ORA_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x0D;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .InclusiveOr, CPU.A, 0x8311, 4);
+}
+
+test "run ORA_ABSX same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x1D;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .InclusiveOr, CPU.A, 0x8311 + 7, 4);
+}
+
+test "run ORA_ABSY same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x19;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .InclusiveOr, CPU.A, 0x8311 + 7, 4);
+}
+
+test "run ORA_ABSX cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x1D;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .InclusiveOr, CPU.A, 0x8311 + 0xFE, 5);
+}
+
+test "run ORA_ABSY cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x19;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .InclusiveOr, CPU.A, 0x8311 + 0xFE, 5);
+}
+
+test "run ORA_INDX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 4;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x01;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x20;
+    cpu.memory.data[0x20 + 4 + 0] = 0x74;
+    cpu.memory.data[0x20 + 4 + 1] = 0x20;
+    test_bitop_register(&cpu, .InclusiveOr, CPU.A, 0x2074, 6);
+}
+
+test "run ORA_INDY same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0x10;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
+    cpu.memory.data[0x86 + 0] = 0x28;
+    cpu.memory.data[0x86 + 1] = 0x40;
+    test_bitop_register(&cpu, .InclusiveOr, CPU.A, 0x4028 + 0x10, 5);
+}
+
+test "run ORA_INDY cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
+    cpu.memory.data[0x86 + 0] = 0x28;
+    cpu.memory.data[0x86 + 1] = 0x40;
+    test_bitop_register(&cpu, .InclusiveOr, CPU.A, 0x4028 + 0xFE, 6);
+}
+
+// BIT tests
+
+test "run BIT_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x24;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_bitop_register(&cpu, .Bit, CPU.A, 0x0011, 3);
+}
+
+test "run BIT_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x2C;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_bitop_register(&cpu, .Bit, CPU.A, 0x8311, 4);
 }
 
 // NOP tests
