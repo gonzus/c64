@@ -46,6 +46,18 @@ pub const CPU = struct {
         LDA_XR = 0xA1,
         LDA_RX = 0xB1,
 
+        LDX_IMM = 0xA2,
+        LDX_ZP = 0xA6,
+        LDX_ZPY = 0xB6,
+        LDX_ABS = 0xAE,
+        LDX_ABSY = 0xBE,
+
+        LDY_IMM = 0xA0,
+        LDY_ZP = 0xA4,
+        LDY_ZPX = 0xB4,
+        LDY_ABS = 0xAC,
+        LDY_ABSX = 0xBC,
+
         NOP = 0xEA,
     };
 
@@ -78,33 +90,28 @@ pub const CPU = struct {
             const op = @intToEnum(OP, self.readByte(self.PC));
             self.PC += 1;
             switch (op) {
-                OP.LDA_IMM => {
-                    self.fetch(A, .Immediate);
-                },
-                OP.LDA_ZP => {
-                    self.fetch(A, .ZeroPage);
-                },
-                OP.LDA_ZPX => {
-                    self.fetch(A, .ZeroPageX);
-                },
-                OP.LDA_ABS => {
-                    self.fetch(A, .Absolute);
-                },
-                OP.LDA_ABSX => {
-                    self.fetch(A, .AbsoluteX);
-                },
-                OP.LDA_ABSY => {
-                    self.fetch(A, .AbsoluteY);
-                },
-                OP.LDA_XR => {
-                    self.fetch(A, .IndexedIndirect);
-                },
-                OP.LDA_RX => {
-                    self.fetch(A, .IndirectIndexed);
-                },
-                OP.NOP => {
-                    self.tick();
-                },
+                OP.LDA_IMM => self.fetch(A, .Immediate),
+                OP.LDA_ZP => self.fetch(A, .ZeroPage),
+                OP.LDA_ZPX => self.fetch(A, .ZeroPageX),
+                OP.LDA_ABS => self.fetch(A, .Absolute),
+                OP.LDA_ABSX => self.fetch(A, .AbsoluteX),
+                OP.LDA_ABSY => self.fetch(A, .AbsoluteY),
+                OP.LDA_XR => self.fetch(A, .IndexedIndirect),
+                OP.LDA_RX => self.fetch(A, .IndirectIndexed),
+
+                OP.LDX_IMM => self.fetch(X, .Immediate),
+                OP.LDX_ZP => self.fetch(X, .ZeroPage),
+                OP.LDX_ZPY => self.fetch(X, .ZeroPageY),
+                OP.LDX_ABS => self.fetch(X, .Absolute),
+                OP.LDX_ABSY => self.fetch(X, .AbsoluteY),
+
+                OP.LDY_IMM => self.fetch(Y, .Immediate),
+                OP.LDY_ZP => self.fetch(Y, .ZeroPage),
+                OP.LDY_ZPX => self.fetch(Y, .ZeroPageX),
+                OP.LDY_ABS => self.fetch(Y, .Absolute),
+                OP.LDY_ABSX => self.fetch(Y, .AbsoluteX),
+
+                OP.NOP => self.tick(),
             }
         }
         return self.ticks - start;
@@ -258,6 +265,10 @@ fn test_load_register(cpu: *CPU, register: usize, address: Type.Word, ticks: u32
     }
 }
 
+// =========================================================
+
+// LDA tests
+
 test "run LDA_IMM" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
@@ -363,6 +374,118 @@ test "run LDA_RX cross page" {
     cpu.memory.data[0x86 + 1] = 0x40;
     test_load_register(&cpu, CPU.A, 0x4028 + 0xFE, 6);
 }
+
+// LDX tests
+
+test "run LDX_IMM" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xA2;
+    test_load_register(&cpu, CPU.X, TEST_ADDRESS + 1, 2);
+}
+
+test "run LDX_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xA6;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_load_register(&cpu, CPU.X, 0x0011, 3);
+}
+
+test "run LDX_ZPY" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xB6;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_load_register(&cpu, CPU.X, 0x0011 + 7, 4);
+}
+
+test "run LDX_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xAE;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_load_register(&cpu, CPU.X, 0x8311, 4);
+}
+
+test "run LDX_ABSY same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xBE;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_load_register(&cpu, CPU.X, 0x8311 + 7, 4);
+}
+
+test "run LDX_ABSY cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xBE;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_load_register(&cpu, CPU.X, 0x8311 + 0xFE, 5);
+}
+
+// LDY tests
+
+test "run LDY_IMM" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xA0;
+    test_load_register(&cpu, CPU.Y, TEST_ADDRESS + 1, 2);
+}
+
+test "run LDY_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xA4;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_load_register(&cpu, CPU.Y, 0x0011, 3);
+}
+
+test "run LDY_ZPX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xB4;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_load_register(&cpu, CPU.Y, 0x0011 + 7, 4);
+}
+
+test "run LDY_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xAC;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_load_register(&cpu, CPU.Y, 0x8311, 4);
+}
+
+test "run LDY_ABSX same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xBC;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_load_register(&cpu, CPU.Y, 0x8311 + 7, 4);
+}
+
+test "run LDY_ABSX cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xBC;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_load_register(&cpu, CPU.Y, 0x8311 + 0xFE, 5);
+}
+
+// NOP tests
 
 test "run NOP" {
     var cpu = CPU.init();
