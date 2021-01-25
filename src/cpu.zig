@@ -32,6 +32,11 @@ pub const CPU = struct {
         Bit,
     };
 
+    const IncDecOp = enum {
+        Increment,
+        Decrement,
+    };
+
     const AddressingMode = enum {
         Immediate,
         ZeroPage,
@@ -123,6 +128,20 @@ pub const CPU = struct {
 
         BIT_ZP = 0x24,
         BIT_ABS = 0x2C,
+
+        INX = 0xE8,
+        INY = 0xC8,
+        INC_ZP = 0xE6,
+        INC_ZPX = 0xF6,
+        INC_ABS = 0xEE,
+        INC_ABSX = 0xFE,
+
+        DEX = 0xCA,
+        DEY = 0x88,
+        DEC_ZP = 0xC6,
+        DEC_ZPX = 0xD6,
+        DEC_ABS = 0xCE,
+        DEC_ABSX = 0xDE,
 
         NOP = 0xEA,
     };
@@ -235,6 +254,20 @@ pub const CPU = struct {
                 OP.BIT_ZP => self.bitOp(.Bit, A, .ZeroPage),
                 OP.BIT_ABS => self.bitOp(.Bit, A, .Absolute),
 
+                OP.INX => self.incDecReg(.Increment, X),
+                OP.INY => self.incDecReg(.Increment, Y),
+                OP.INC_ZP => self.incDecMem(.Increment, .ZeroPage),
+                OP.INC_ZPX => self.incDecMem(.Increment, .ZeroPageX),
+                OP.INC_ABS => self.incDecMem(.Increment, .Absolute),
+                OP.INC_ABSX => self.incDecMem(.Increment, .AbsoluteX),
+
+                OP.DEX => self.incDecReg(.Decrement, X),
+                OP.DEY => self.incDecReg(.Decrement, Y),
+                OP.DEC_ZP => self.incDecMem(.Decrement, .ZeroPage),
+                OP.DEC_ZPX => self.incDecMem(.Decrement, .ZeroPageX),
+                OP.DEC_ABS => self.incDecMem(.Decrement, .Absolute),
+                OP.DEC_ABSX => self.incDecMem(.Decrement, .AbsoluteX),
+
                 OP.NOP => self.tick(),
             }
         }
@@ -294,6 +327,27 @@ pub const CPU = struct {
         } else {
             self.regs[register] = result;
         }
+    }
+
+    fn incDecReg(self: *CPU, op: IncDecOp, register: usize) void {
+        switch (op) {
+            .Increment => self.regs[register] +%= 1,
+            .Decrement => self.regs[register] -%= 1,
+        }
+        self.setNZ(self.regs[register]);
+        self.tick();
+    }
+
+    fn incDecMem(self: *CPU, op: IncDecOp, mode: AddressingMode) void {
+        const address = self.computeAddress(mode, true);
+        var value = self.readByte(address);
+        switch (op) {
+            .Increment => value +%= 1,
+            .Decrement => value -%= 1,
+        }
+        self.writeByte(address, value);
+        self.setNZ(value);
+        self.tick();
     }
 
     fn computeAddress(self: *CPU, mode: AddressingMode, alwaysUseExtra: bool) Type.Word {
@@ -667,6 +721,61 @@ fn test_bitop_register(cpu: *CPU, op: CPU.BitOp, register: usize, address: Type.
         testing.expect(register == CPU.X or cpu.regs[CPU.X] == prevRegs[CPU.X]);
         testing.expect(register == CPU.Y or cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
         testing.expect(register == CPU.SP or cpu.regs[CPU.SP] == prevRegs[CPU.SP]);
+    }
+}
+
+fn test_inc_dec(cpu: *CPU, op: CPU.IncDecOp, register: usize, address: Type.Word, ticks: u32) void {
+    const Data = struct {
+        v: Type.Byte,
+        o: CPU.IncDecOp,
+        e: Type.Byte,
+        N: Type.Bit,
+        Z: Type.Bit,
+    };
+    const data = [_]Data{
+        .{ .v = 0x11, .o = .Increment, .e = 0x12, .N = 0, .Z = 0 },
+        .{ .v = 0x11, .o = .Decrement, .e = 0x10, .N = 0, .Z = 0 },
+        .{ .v = 0xF0, .o = .Increment, .e = 0xF1, .N = 1, .Z = 0 },
+        .{ .v = 0xF0, .o = .Decrement, .e = 0xEF, .N = 1, .Z = 0 },
+        .{ .v = 0x00, .o = .Increment, .e = 0x01, .N = 0, .Z = 0 },
+        .{ .v = 0x00, .o = .Decrement, .e = 0xFF, .N = 1, .Z = 0 },
+        .{ .v = 0x01, .o = .Increment, .e = 0x02, .N = 0, .Z = 0 },
+        .{ .v = 0x01, .o = .Decrement, .e = 0x00, .N = 0, .Z = 1 },
+        .{ .v = 0xFF, .o = .Increment, .e = 0x00, .N = 0, .Z = 1 },
+        .{ .v = 0xFF, .o = .Decrement, .e = 0xFE, .N = 1, .Z = 0 },
+    };
+    for (data) |d| {
+        if (op != d.o) {
+            continue;
+        }
+        cpu.PC = TEST_ADDRESS;
+        if (address == 0) {
+            cpu.regs[register] = d.v; // set desired register
+        } else {
+            cpu.memory.data[address] = d.v; // set desired address
+        }
+
+        const prevPS = cpu.PS; // remember PS
+        const prevRegs = cpu.regs; // remember registers
+        cpu.PS.byte = 0; // set PS to 0
+
+        const used = cpu.run(ticks);
+        testing.expect(used == ticks);
+
+        if (address == 0) {
+            testing.expect(cpu.regs[register] == d.e);
+        } else {
+            testing.expect(cpu.memory.data[address] == d.e);
+        }
+        testing.expect(cpu.PS.bits.N == d.N); // got correct N bit?
+        testing.expect(cpu.PS.bits.Z == d.Z); // got correct Z bit?
+
+        // other bits didn't change?
+        testing.expect(cpu.PS.bits.C == prevPS.bits.C);
+        testing.expect(cpu.PS.bits.I == prevPS.bits.I);
+        testing.expect(cpu.PS.bits.D == prevPS.bits.D);
+        testing.expect(cpu.PS.bits.B == prevPS.bits.B);
+        testing.expect(cpu.PS.bits.V == prevPS.bits.V);
     }
 }
 
@@ -1462,6 +1571,110 @@ test "run BIT_ABS" {
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
     test_bitop_register(&cpu, .Bit, CPU.A, 0x8311, 4);
+}
+
+// INC tests
+
+test "run INC_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xE6;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_inc_dec(&cpu, .Increment, 0, 0x0011, 5);
+}
+
+test "run INC_ZPX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xF6;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_inc_dec(&cpu, .Increment, 0, 0x0011 + 7, 6);
+}
+
+test "run INC_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xEE;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_inc_dec(&cpu, .Increment, 0, 0x8311, 6);
+}
+
+test "run INC_ABSX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_inc_dec(&cpu, .Increment, 0, 0x8311 + 7, 7);
+}
+
+test "run INCX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xE8;
+    test_inc_dec(&cpu, .Increment, CPU.X, 0, 2);
+}
+
+test "run INCY" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xC8;
+    test_inc_dec(&cpu, .Increment, CPU.Y, 0, 2);
+}
+
+// DEC tests
+
+test "run DEC_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xC6;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_inc_dec(&cpu, .Decrement, 0, 0x0011, 5);
+}
+
+test "run DEC_ZPX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xD6;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_inc_dec(&cpu, .Decrement, 0, 0x0011 + 7, 6);
+}
+
+test "run DEC_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xCE;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_inc_dec(&cpu, .Decrement, 0, 0x8311, 6);
+}
+
+test "run DEC_ABSX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xDE;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_inc_dec(&cpu, .Decrement, 0, 0x8311 + 7, 7);
+}
+
+test "run DECX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xCA;
+    test_inc_dec(&cpu, .Decrement, CPU.X, 0, 2);
+}
+
+test "run DECY" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x88;
+    test_inc_dec(&cpu, .Decrement, CPU.Y, 0, 2);
 }
 
 // NOP tests
