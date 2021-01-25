@@ -242,14 +242,14 @@ pub const CPU = struct {
     }
 
     fn fetch(self: *CPU, register: usize, mode: AddressingMode) void {
-        const address = self.computeAddress(mode);
+        const address = self.computeAddress(mode, false);
         const value = self.readByte(address);
         self.regs[register] = value;
         self.setNZ(self.regs[register]);
     }
 
     fn store(self: *CPU, register: usize, mode: AddressingMode) void {
-        const address = self.computeAddress(mode);
+        const address = self.computeAddress(mode, false);
         self.writeByte(address, self.regs[register]);
     }
 
@@ -281,7 +281,7 @@ pub const CPU = struct {
     }
 
     fn bitOp(self: *CPU, op: BitOp, register: usize, mode: AddressingMode) void {
-        const address = self.computeAddress(mode);
+        const address = self.computeAddress(mode, false);
         const value = self.readByte(address);
         const result = switch (op) {
             .And, .Bit => self.regs[register] & value,
@@ -296,7 +296,7 @@ pub const CPU = struct {
         }
     }
 
-    fn computeAddress(self: *CPU, mode: AddressingMode) Type.Word {
+    fn computeAddress(self: *CPU, mode: AddressingMode, alwaysUseExtra: bool) Type.Word {
         const address = switch (mode) {
             .Immediate => blk: {
                 const address = self.PC;
@@ -330,7 +330,7 @@ pub const CPU = struct {
             .AbsoluteX => blk: {
                 const initial = self.readWord(self.PC);
                 const final = initial + self.regs[X];
-                if (!samePage(initial, final)) {
+                if (alwaysUseExtra or !samePage(initial, final)) {
                     self.tick();
                 }
                 break :blk final;
@@ -338,7 +338,7 @@ pub const CPU = struct {
             .AbsoluteY => blk: {
                 const initial = self.readWord(self.PC);
                 const final = initial + self.regs[Y];
-                if (!samePage(initial, final)) {
+                if (alwaysUseExtra or !samePage(initial, final)) {
                     self.tick();
                 }
                 break :blk final;
@@ -356,7 +356,7 @@ pub const CPU = struct {
                 self.PC += 1;
                 const initial = self.readWord(address);
                 const final = initial + self.regs[Y];
-                if (!samePage(initial, final)) {
+                if (alwaysUseExtra or !samePage(initial, final)) {
                     self.tick();
                 }
                 break :blk final;
