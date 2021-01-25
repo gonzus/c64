@@ -8,7 +8,7 @@ pub const Status = extern union {
     byte: Type.Byte,
     bits: Bits,
 
-    const Name = enum {
+    pub const Name = enum {
         Carry = 0,
         Zero = 1,
         Interrupt = 2,
@@ -52,7 +52,7 @@ pub const Status = extern union {
         return if ((self.byte & mask) > 0) 1 else 0;
     }
 
-    pub fn setBitByName(self: *Status, name: Name, bit: u1) void {
+    pub fn setBitByName(self: *Status, name: Name, bit: Type.Bit) void {
         const shift = @enumToInt(name);
         const mask = @as(Type.Byte, 1) << shift;
         if (bit == 1) {

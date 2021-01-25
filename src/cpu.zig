@@ -37,6 +37,11 @@ pub const CPU = struct {
         Decrement,
     };
 
+    const ClearSetOp = enum {
+        Clear,
+        Set,
+    };
+
     const AddressingMode = enum {
         Immediate,
         ZeroPage,
@@ -142,6 +147,14 @@ pub const CPU = struct {
         DEC_ZPX = 0xD6,
         DEC_ABS = 0xCE,
         DEC_ABSX = 0xDE,
+
+        CLC = 0x18,
+        CLD = 0xD8,
+        CLI = 0x58,
+        CLV = 0xB8,
+        SEC = 0x38,
+        SED = 0xF8,
+        SEI = 0x78,
 
         NOP = 0xEA,
     };
@@ -268,6 +281,14 @@ pub const CPU = struct {
                 OP.DEC_ABS => self.incDecMem(.Decrement, .Absolute),
                 OP.DEC_ABSX => self.incDecMem(.Decrement, .AbsoluteX),
 
+                OP.CLC => self.clearSetBit(.Clear, .Carry),
+                OP.CLD => self.clearSetBit(.Clear, .Decimal),
+                OP.CLI => self.clearSetBit(.Clear, .Interrupt),
+                OP.CLV => self.clearSetBit(.Clear, .Overflow),
+                OP.SEC => self.clearSetBit(.Set, .Carry),
+                OP.SED => self.clearSetBit(.Set, .Decimal),
+                OP.SEI => self.clearSetBit(.Set, .Interrupt),
+
                 OP.NOP => self.tick(),
             }
         }
@@ -347,6 +368,15 @@ pub const CPU = struct {
         }
         self.writeByte(address, value);
         self.setNZ(value);
+        self.tick();
+    }
+
+    fn clearSetBit(self: *CPU, op: ClearSetOp, bit: Status.Name) void {
+        const value: Type.Bit = switch (op) {
+            .Clear => 0,
+            .Set => 1,
+        };
+        self.PS.setBitByName(bit, value);
         self.tick();
     }
 
@@ -777,6 +807,34 @@ fn test_inc_dec(cpu: *CPU, op: CPU.IncDecOp, register: usize, address: Type.Word
         testing.expect(cpu.PS.bits.B == prevPS.bits.B);
         testing.expect(cpu.PS.bits.V == prevPS.bits.V);
     }
+}
+
+fn test_set_bit(cpu: *CPU, op: CPU.ClearSetOp, bit: Status.Name, ticks: u32) void {
+    cpu.PC = TEST_ADDRESS;
+    switch (op) {
+        .Clear => cpu.PS.setBitByName(bit, 1),
+        .Set => cpu.PS.setBitByName(bit, 0),
+    }
+
+    const prevPS = cpu.PS; // remember PS
+    const prevRegs = cpu.regs; // remember registers
+
+    const used = cpu.run(ticks);
+    testing.expect(used == ticks);
+
+    switch (op) {
+        .Clear => testing.expect(cpu.PS.getBitByName(bit) == 0),
+        .Set => testing.expect(cpu.PS.getBitByName(bit) == 1),
+    }
+
+    // other bits didn't change?
+    testing.expect(bit == .Carry or cpu.PS.bits.C == prevPS.bits.C);
+    testing.expect(bit == .Zero or cpu.PS.bits.Z == prevPS.bits.Z);
+    testing.expect(bit == .Interrupt or cpu.PS.bits.I == prevPS.bits.I);
+    testing.expect(bit == .Decimal or cpu.PS.bits.D == prevPS.bits.D);
+    testing.expect(bit == .Break or cpu.PS.bits.B == prevPS.bits.B);
+    testing.expect(bit == .Overflow or cpu.PS.bits.V == prevPS.bits.V);
+    testing.expect(bit == .Negative or cpu.PS.bits.N == prevPS.bits.N);
 }
 
 // LDA tests
@@ -1675,6 +1733,57 @@ test "run DECY" {
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0x88;
     test_inc_dec(&cpu, .Decrement, CPU.Y, 0, 2);
+}
+
+// CLR / SET tests
+
+test "run CLC" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x18;
+    test_set_bit(&cpu, .Clear, .Carry, 2);
+}
+
+test "run CLD" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xD8;
+    test_set_bit(&cpu, .Clear, .Decimal, 2);
+}
+
+test "run CLI" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x58;
+    test_set_bit(&cpu, .Clear, .Interrupt, 2);
+}
+
+test "run CLV" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xB8;
+    test_set_bit(&cpu, .Clear, .Overflow, 2);
+}
+
+test "run SEC" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x38;
+    test_set_bit(&cpu, .Set, .Carry, 2);
+}
+
+test "run SED" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xF8;
+    test_set_bit(&cpu, .Set, .Decimal, 2);
+}
+
+test "run SEI" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x78;
+    test_set_bit(&cpu, .Set, .Interrupt, 2);
 }
 
 // NOP tests
