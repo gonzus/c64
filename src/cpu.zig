@@ -25,6 +25,13 @@ pub const CPU = struct {
     const Y = 2;
     const SP = 3;
 
+    const DisplaceOp = enum {
+        ShiftLeft,
+        ShiftRight,
+        RotateLeft,
+        RotateRight,
+    };
+
     const BitOp = enum {
         And,
         InclusiveOr,
@@ -155,6 +162,30 @@ pub const CPU = struct {
         SEC = 0x38,
         SED = 0xF8,
         SEI = 0x78,
+
+        ASL_ACC = 0x0A,
+        ASL_ZP = 0x06,
+        ASL_ZPX = 0x16,
+        ASL_ABS = 0x0E,
+        ASL_ABSX = 0x1E,
+
+        LSR_ACC = 0x4A,
+        LSR_ZP = 0x46,
+        LSR_ZPX = 0x56,
+        LSR_ABS = 0x4E,
+        LSR_ABSX = 0x5E,
+
+        ROL_ACC = 0x2A,
+        ROL_ZP = 0x26,
+        ROL_ZPX = 0x36,
+        ROL_ABS = 0x2E,
+        ROL_ABSX = 0x3E,
+
+        ROR_ACC = 0x6A,
+        ROR_ZP = 0x66,
+        ROR_ZPX = 0x76,
+        ROR_ABS = 0x6E,
+        ROR_ABSX = 0x7E,
 
         NOP = 0xEA,
     };
@@ -289,10 +320,36 @@ pub const CPU = struct {
                 OP.SED => self.clearSetBit(.Set, .Decimal),
                 OP.SEI => self.clearSetBit(.Set, .Interrupt),
 
+                OP.ASL_ACC => self.displaceReg(.ShiftLeft, A),
+                OP.ASL_ZP => self.displaceMem(.ShiftLeft, .ZeroPage),
+                OP.ASL_ZPX => self.displaceMem(.ShiftLeft, .ZeroPageX),
+                OP.ASL_ABS => self.displaceMem(.ShiftLeft, .Absolute),
+                OP.ASL_ABSX => self.displaceMem(.ShiftLeft, .AbsoluteX),
+
+                OP.LSR_ACC => self.displaceReg(.ShiftRight, A),
+                OP.LSR_ZP => self.displaceMem(.ShiftRight, .ZeroPage),
+                OP.LSR_ZPX => self.displaceMem(.ShiftRight, .ZeroPageX),
+                OP.LSR_ABS => self.displaceMem(.ShiftRight, .Absolute),
+                OP.LSR_ABSX => self.displaceMem(.ShiftRight, .AbsoluteX),
+
+                OP.ROL_ACC => self.displaceReg(.RotateLeft, A),
+                OP.ROL_ZP => self.displaceMem(.RotateLeft, .ZeroPage),
+                OP.ROL_ZPX => self.displaceMem(.RotateLeft, .ZeroPageX),
+                OP.ROL_ABS => self.displaceMem(.RotateLeft, .Absolute),
+                OP.ROL_ABSX => self.displaceMem(.RotateLeft, .AbsoluteX),
+
+                OP.ROR_ACC => self.displaceReg(.RotateRight, A),
+                OP.ROR_ZP => self.displaceMem(.RotateRight, .ZeroPage),
+                OP.ROR_ZPX => self.displaceMem(.RotateRight, .ZeroPageX),
+                OP.ROR_ABS => self.displaceMem(.RotateRight, .Absolute),
+                OP.ROR_ABSX => self.displaceMem(.RotateRight, .AbsoluteX),
+
                 OP.NOP => self.tick(),
             }
         }
-        return self.ticks - start;
+        const used = self.ticks - start;
+        // std.debug.print("USED {} TICKS\n", .{used});
+        return used;
     }
 
     fn fetch(self: *CPU, register: usize, mode: AddressingMode) void {
@@ -378,6 +435,49 @@ pub const CPU = struct {
         };
         self.PS.setBitByName(bit, value);
         self.tick();
+    }
+
+    fn displaceReg(self: *CPU, op: DisplaceOp, register: usize) void {
+        self.regs[register] = self.displaceByte(op, self.regs[register]);
+    }
+
+    fn displaceMem(self: *CPU, op: DisplaceOp, mode: AddressingMode) void {
+        const address = self.computeAddress(mode, true);
+        var value = self.readByte(address);
+        value = self.displaceByte(op, value);
+        self.writeByte(address, value);
+    }
+
+    fn displaceByte(self: *CPU, op: DisplaceOp, value: Type.Byte) Type.Byte {
+        var displaced = value;
+        switch (op) {
+            .ShiftLeft => {
+                self.PS.bits.C = if ((displaced & 0b10000000) > 0) 1 else 0;
+                displaced <<= 1;
+            },
+            .ShiftRight => {
+                self.PS.bits.C = if ((displaced & 0b00000001) > 0) 1 else 0;
+                displaced >>= 1;
+            },
+            .RotateLeft => {
+                const oldC = self.PS.bits.C;
+                self.PS.bits.C = if ((displaced & 0b10000000) > 0) 1 else 0;
+                displaced <<= 1;
+                if (oldC > 0) {
+                    displaced |= 1;
+                }
+            },
+            .RotateRight => {
+                const oldC = self.PS.bits.C;
+                self.PS.bits.C = if ((displaced & 0b00000001) > 0) 1 else 0;
+                displaced >>= 1;
+                if (oldC > 0) {
+                    displaced |= 0b10000000;
+                }
+            },
+        }
+        self.tick();
+        return displaced;
     }
 
     fn computeAddress(self: *CPU, mode: AddressingMode, alwaysUseExtra: bool) Type.Word {
@@ -835,6 +935,69 @@ fn test_set_bit(cpu: *CPU, op: CPU.ClearSetOp, bit: Status.Name, ticks: u32) voi
     testing.expect(bit == .Break or cpu.PS.bits.B == prevPS.bits.B);
     testing.expect(bit == .Overflow or cpu.PS.bits.V == prevPS.bits.V);
     testing.expect(bit == .Negative or cpu.PS.bits.N == prevPS.bits.N);
+}
+
+fn test_displace_bit(cpu: *CPU, op: CPU.DisplaceOp, register: usize, address: Type.Word, ticks: u32) void {
+    const Data = struct {
+        v: Type.Byte,
+        o: CPU.DisplaceOp,
+        e: Type.Byte,
+        oC: Type.Bit,
+        nC: Type.Bit,
+    };
+    const data = [_]Data{
+        .{ .v = 0b00000000, .o = .ShiftLeft, .e = 0b00000000, .oC = 0, .nC = 0 },
+        .{ .v = 0b00000001, .o = .ShiftLeft, .e = 0b00000010, .oC = 0, .nC = 0 },
+        .{ .v = 0b10000001, .o = .ShiftLeft, .e = 0b00000010, .oC = 0, .nC = 1 },
+        .{ .v = 0b00000000, .o = .ShiftRight, .e = 0b00000000, .oC = 0, .nC = 0 },
+        .{ .v = 0b00000001, .o = .ShiftRight, .e = 0b00000000, .oC = 0, .nC = 1 },
+        .{ .v = 0b10000001, .o = .ShiftRight, .e = 0b01000000, .oC = 0, .nC = 1 },
+        .{ .v = 0b00000000, .o = .RotateLeft, .e = 0b00000000, .oC = 0, .nC = 0 },
+        .{ .v = 0b00000000, .o = .RotateLeft, .e = 0b00000001, .oC = 1, .nC = 0 },
+        .{ .v = 0b00000001, .o = .RotateLeft, .e = 0b00000010, .oC = 0, .nC = 0 },
+        .{ .v = 0b00000001, .o = .RotateLeft, .e = 0b00000011, .oC = 1, .nC = 0 },
+        .{ .v = 0b10000001, .o = .RotateLeft, .e = 0b00000010, .oC = 0, .nC = 1 },
+        .{ .v = 0b10000001, .o = .RotateLeft, .e = 0b00000011, .oC = 1, .nC = 1 },
+        .{ .v = 0b00000000, .o = .RotateRight, .e = 0b00000000, .oC = 0, .nC = 0 },
+        .{ .v = 0b00000000, .o = .RotateRight, .e = 0b10000000, .oC = 1, .nC = 0 },
+        .{ .v = 0b00000001, .o = .RotateRight, .e = 0b00000000, .oC = 0, .nC = 1 },
+        .{ .v = 0b00000001, .o = .RotateRight, .e = 0b10000000, .oC = 1, .nC = 1 },
+        .{ .v = 0b10000001, .o = .RotateRight, .e = 0b01000000, .oC = 0, .nC = 1 },
+        .{ .v = 0b10000001, .o = .RotateRight, .e = 0b11000000, .oC = 1, .nC = 1 },
+    };
+    for (data) |d| {
+        if (op != d.o) {
+            continue;
+        }
+        cpu.PC = TEST_ADDRESS;
+        if (address == 0) {
+            cpu.regs[register] = d.v;
+        } else {
+            cpu.memory.data[address] = d.v;
+        }
+        cpu.PS.bits.C = d.oC;
+
+        const prevPS = cpu.PS; // remember PS
+        const prevRegs = cpu.regs; // remember registers
+
+        const used = cpu.run(ticks);
+        testing.expect(used == ticks);
+
+        if (address == 0) {
+            cpu.regs[register] = d.e;
+        } else {
+            cpu.memory.data[address] = d.e;
+        }
+        testing.expect(cpu.PS.bits.C == d.nC);
+
+        // other bits didn't change?
+        testing.expect(cpu.PS.bits.Z == prevPS.bits.Z);
+        testing.expect(cpu.PS.bits.I == prevPS.bits.I);
+        testing.expect(cpu.PS.bits.D == prevPS.bits.D);
+        testing.expect(cpu.PS.bits.B == prevPS.bits.B);
+        testing.expect(cpu.PS.bits.V == prevPS.bits.V);
+        testing.expect(cpu.PS.bits.N == prevPS.bits.N);
+    }
 }
 
 // LDA tests
@@ -1784,6 +1947,186 @@ test "run SEI" {
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0x78;
     test_set_bit(&cpu, .Set, .Interrupt, 2);
+}
+
+// ASL tests
+
+test "run ASL_ACC" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x0A;
+    test_displace_bit(&cpu, .ShiftLeft, CPU.A, 0, 2);
+}
+
+test "run ASL_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x06;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_displace_bit(&cpu, .ShiftLeft, 0, 0x11, 5);
+}
+
+test "run ASL_ZPX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x16;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_displace_bit(&cpu, .ShiftLeft, 0, 0x11 + 7, 6);
+}
+
+test "run ASL_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x0E;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_displace_bit(&cpu, .ShiftLeft, 0, 0x8311, 6);
+}
+
+test "run ASL_ABSX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x1E;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_displace_bit(&cpu, .ShiftLeft, 0, 0x8311 + 7, 7);
+}
+
+// LSR tests
+
+test "run LSR_ACC" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x4A;
+    test_displace_bit(&cpu, .ShiftRight, CPU.A, 0, 2);
+}
+
+test "run LSR_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x46;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_displace_bit(&cpu, .ShiftRight, 0, 0x11, 5);
+}
+
+test "run LSR_ZPX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x56;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_displace_bit(&cpu, .ShiftRight, 0, 0x11 + 7, 6);
+}
+
+test "run LSR_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x4E;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_displace_bit(&cpu, .ShiftRight, 0, 0x8311, 6);
+}
+
+test "run LSR_ABSX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x5E;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_displace_bit(&cpu, .ShiftRight, 0, 0x8311 + 7, 7);
+}
+
+// ROL tests
+
+test "run ROL_ACC" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x2A;
+    test_displace_bit(&cpu, .RotateLeft, CPU.A, 0, 2);
+}
+
+test "run ROL_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x26;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_displace_bit(&cpu, .RotateLeft, 0, 0x11, 5);
+}
+
+test "run ROL_ZPX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x36;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_displace_bit(&cpu, .RotateLeft, 0, 0x11 + 7, 6);
+}
+
+test "run ROL_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x2E;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_displace_bit(&cpu, .RotateLeft, 0, 0x8311, 6);
+}
+
+test "run ROL_ABSX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x3E;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_displace_bit(&cpu, .RotateLeft, 0, 0x8311 + 7, 7);
+}
+
+// ROR tests
+
+test "run ROR_ACC" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x6A;
+    test_displace_bit(&cpu, .RotateRight, CPU.A, 0, 2);
+}
+
+test "run ROR_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x66;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_displace_bit(&cpu, .RotateRight, 0, 0x11, 5);
+}
+
+test "run ROR_ZPX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x76;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_displace_bit(&cpu, .RotateRight, 0, 0x11 + 7, 6);
+}
+
+test "run ROR_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x6E;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_displace_bit(&cpu, .RotateRight, 0, 0x8311, 6);
+}
+
+test "run ROR_ABSX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x7E;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_displace_bit(&cpu, .RotateRight, 0, 0x8311 + 7, 7);
 }
 
 // NOP tests
