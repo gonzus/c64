@@ -57,6 +57,7 @@ pub const CPU = struct {
         Absolute,
         AbsoluteX,
         AbsoluteY,
+        Indirect,
         IndirectX,
         IndirectY,
     };
@@ -196,6 +197,11 @@ pub const CPU = struct {
         BVC = 0x50,
         BVS = 0x70,
 
+        JMP_ABS = 0x4C,
+        JMP_IND = 0x6C,
+        JSR_ABS = 0x20,
+        RTS = 0x60,
+
         NOP = 0xEA,
     };
 
@@ -272,10 +278,10 @@ pub const CPU = struct {
                 OP.TSX => self.transfer(SP, X, true),
                 OP.TXS => self.transfer(X, SP, false),
 
-                OP.PHA => self.push(self.regs[A]),
-                OP.PHP => self.push(self.PS.byte),
-                OP.PLA => self.regs[A] = self.pop(true),
-                OP.PLP => self.PS.byte = self.pop(false),
+                OP.PHA => self.pushByteToStack(self.regs[A]),
+                OP.PHP => self.pushByteToStack(self.PS.byte),
+                OP.PLA => self.regs[A] = self.popByteFromStack(),
+                OP.PLP => self.PS.byte = self.popByteFromStack(),
 
                 OP.AND_IMM => self.bitOp(.And, A, .Immediate),
                 OP.AND_ZP => self.bitOp(.And, A, .ZeroPage),
@@ -362,6 +368,11 @@ pub const CPU = struct {
                 OP.BVC => self.branchOnBit(Status.Name.Overflow, .Clear),
                 OP.BVS => self.branchOnBit(Status.Name.Overflow, .Set),
 
+                OP.JMP_ABS => self.jumpToAddress(.Absolute, false),
+                OP.JMP_IND => self.jumpToAddress(.Indirect, false),
+                OP.JSR_ABS => self.jumpToAddress(.Absolute, true),
+                OP.RTS => self.returnToAddress(),
+
                 OP.NOP => self.tick(),
             }
         }
@@ -389,22 +400,46 @@ pub const CPU = struct {
         self.tick();
     }
 
-    fn push(self: *CPU, value: Type.Byte) void {
-        const address = @as(Type.Word, STACK_BASE) + self.regs[SP];
-        self.writeByte(address, value);
-        self.regs[SP] -%= 1;
+    fn pushByteToStack(self: *CPU, byte: Type.Byte) void {
+        self.pushByte(byte);
         self.tick();
     }
 
-    fn pop(self: *CPU, flags: bool) Type.Byte {
+    fn popByteFromStack(self: *CPU) Type.Byte {
+        const value = self.popByte(true);
+        return value;
+    }
+
+    fn pushByte(self: *CPU, value: Type.Byte) void {
+        const address = @as(Type.Word, STACK_BASE) + self.regs[SP];
+        self.writeByte(address, value);
+        self.regs[SP] -%= 1;
+    }
+
+    fn pushWord(self: *CPU, value: Type.Word) void {
+        const hi = @as(Type.Word, value >> 8);
+        const lo = @as(Type.Word, value & 0xFF);
+        self.pushByte(@intCast(Type.Byte, hi));
+        self.pushByte(@intCast(Type.Byte, lo));
+    }
+
+    fn popByte(self: *CPU, flags: bool) Type.Byte {
         self.regs[SP] +%= 1;
         self.tick();
         const address = @as(Type.Word, STACK_BASE) + self.regs[SP];
-        self.tick();
         const value = self.readByte(address);
         if (flags) {
+            self.tick();
             self.setNZ(value);
         }
+        return value;
+    }
+
+    fn popWord(self: *CPU) Type.Word {
+        const lo = @as(Type.Word, self.popByte(false));
+        const hi = @as(Type.Word, self.popByte(false)) << 8;
+        const value = hi | lo;
+        self.tick();
         return value;
     }
 
@@ -516,6 +551,26 @@ pub const CPU = struct {
         }
     }
 
+    fn jumpToAddress(self: *CPU, mode: AddressingMode, pushReturn: bool) void {
+        // http://www.obelisk.me.uk/6502/reference.html#JMP
+        // An original 6502 does not correctly fetch the target address if
+        // the indirect vector falls on a page boundary (e.g. $xxFF where xx is
+        // any value from $00 to $FF).  In this case fetches the LSB from $xxFF
+        // as expected but takes the MSB from $xx00.  This is fixed in some
+        // later chips like the 65SC02 so for compatibility always ensure the
+        // indirect vector is not at the end of the page.
+        const address = self.computeAddress(mode, false);
+        if (pushReturn) {
+            self.pushWord(self.PC - 1);
+            self.tick();
+        }
+        self.PC = address;
+    }
+
+    fn returnToAddress(self: *CPU) void {
+        self.PC = self.popWord() + 1;
+    }
+
     fn computeAddress(self: *CPU, mode: AddressingMode, alwaysUseExtra: bool) Type.Word {
         const address = switch (mode) {
             .Immediate => blk: {
@@ -562,6 +617,11 @@ pub const CPU = struct {
                     self.tick();
                 }
                 break :blk final;
+            },
+            .Indirect => blk: {
+                const initial = self.readWord(self.PC);
+                const address = self.readWord(initial);
+                break :blk address;
             },
             .IndirectX => blk: {
                 var address = @as(Type.Word, self.readByte(self.PC));
@@ -1003,7 +1063,6 @@ fn test_branch_bit(cpu: *CPU, bit: Status.Name, state: CPU.ClearSet, ticks: u32)
 
         const expected = ticks + d.x;
         const used = cpu.run(expected);
-        // std.debug.print("EXPECTED {}, USED {} TICKS\n", .{ expected, used });
         testing.expect(used == expected);
         var newPC: Type.Word = TEST_ADDRESS + 1;
         if (d.x == 0) {
@@ -1018,6 +1077,43 @@ fn test_branch_bit(cpu: *CPU, bit: Status.Name, state: CPU.ClearSet, ticks: u32)
         testing.expect(cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
         testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP]);
     }
+}
+
+fn test_jmp(cpu: *CPU, address: Type.Word, pushReturn: bool, ticks: u32) void {
+    cpu.PC = TEST_ADDRESS;
+    const prevPS = cpu.PS; // remember PS
+    const prevRegs = cpu.regs; // remember registers
+
+    const used = cpu.run(ticks);
+    // std.debug.print("EXPECTED {}, USED {} TICKS\n", .{ ticks, used });
+    testing.expect(used == ticks);
+    testing.expect(cpu.PC == address);
+    testing.expect(cpu.PS.byte == prevPS.byte);
+    testing.expect(cpu.regs[CPU.A] == prevRegs[CPU.A]);
+    testing.expect(cpu.regs[CPU.X] == prevRegs[CPU.X]);
+    testing.expect(cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
+    if (pushReturn) {
+        testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP] - 2);
+    } else {
+        testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP]);
+    }
+}
+
+fn test_rts(cpu: *CPU) void {
+    cpu.PC = TEST_ADDRESS;
+    const prevPS = cpu.PS; // remember PS
+    const prevRegs = cpu.regs; // remember registers
+
+    const ticks: u32 = 12;
+    const used = cpu.run(ticks);
+    // std.debug.print("EXPECTED {}, USED {} TICKS\n", .{ ticks, used });
+    testing.expect(used == ticks);
+    testing.expect(cpu.PC == TEST_ADDRESS + 3);
+    testing.expect(cpu.PS.byte == prevPS.byte);
+    testing.expect(cpu.regs[CPU.A] == prevRegs[CPU.A]);
+    testing.expect(cpu.regs[CPU.X] == prevRegs[CPU.X]);
+    testing.expect(cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
+    testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP]);
 }
 
 fn test_displace_bit(cpu: *CPU, op: CPU.DisplaceOp, register: usize, address: Type.Word, ticks: u32) void {
@@ -2268,6 +2364,51 @@ test "run BVS" {
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0x70;
     test_branch_bit(&cpu, .Overflow, .Set, 2);
+}
+
+// JMP tests
+
+test "run JMP_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x4C;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_jmp(&cpu, 0x8311, false, 3);
+}
+
+test "run JMP_IND" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x6C;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    cpu.memory.data[0x8311 + 0] = 0x74;
+    cpu.memory.data[0x8311 + 1] = 0x20;
+    test_jmp(&cpu, 0x2074, false, 5);
+}
+
+// JSR tests
+
+test "run JSR_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x20;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_jmp(&cpu, 0x8311, true, 6);
+}
+
+// RTS tests
+
+test "run RTS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x20;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    cpu.memory.data[0x8311] = 0x60;
+    test_rts(&cpu);
 }
 
 // NOP tests
