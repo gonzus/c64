@@ -44,7 +44,7 @@ pub const CPU = struct {
         Decrement,
     };
 
-    const ClearSetOp = enum {
+    const ClearSet = enum {
         Clear,
         Set,
     };
@@ -186,6 +186,15 @@ pub const CPU = struct {
         ROR_ZPX = 0x76,
         ROR_ABS = 0x6E,
         ROR_ABSX = 0x7E,
+
+        BCC = 0x90,
+        BCS = 0xB0,
+        BEQ = 0xF0,
+        BMI = 0x30,
+        BNE = 0xD0,
+        BPL = 0x10,
+        BVC = 0x50,
+        BVS = 0x70,
 
         NOP = 0xEA,
     };
@@ -344,11 +353,19 @@ pub const CPU = struct {
                 OP.ROR_ABS => self.displaceMem(.RotateRight, .Absolute),
                 OP.ROR_ABSX => self.displaceMem(.RotateRight, .AbsoluteX),
 
+                OP.BCC => self.branchOnBit(Status.Name.Carry, .Clear),
+                OP.BCS => self.branchOnBit(Status.Name.Carry, .Set),
+                OP.BEQ => self.branchOnBit(Status.Name.Zero, .Set),
+                OP.BMI => self.branchOnBit(Status.Name.Negative, .Set),
+                OP.BNE => self.branchOnBit(Status.Name.Zero, .Clear),
+                OP.BPL => self.branchOnBit(Status.Name.Negative, .Clear),
+                OP.BVC => self.branchOnBit(Status.Name.Overflow, .Clear),
+                OP.BVS => self.branchOnBit(Status.Name.Overflow, .Set),
+
                 OP.NOP => self.tick(),
             }
         }
         const used = self.ticks - start;
-        // std.debug.print("USED {} TICKS\n", .{used});
         return used;
     }
 
@@ -428,7 +445,7 @@ pub const CPU = struct {
         self.tick();
     }
 
-    fn clearSetBit(self: *CPU, op: ClearSetOp, bit: Status.Name) void {
+    fn clearSetBit(self: *CPU, op: ClearSet, bit: Status.Name) void {
         const value: Type.Bit = switch (op) {
             .Clear => 0,
             .Set => 1,
@@ -478,6 +495,25 @@ pub const CPU = struct {
         }
         self.tick();
         return displaced;
+    }
+
+    fn branchOnBit(self: *CPU, bit: Status.Name, state: ClearSet) void {
+        const current = self.PS.getBitByName(bit);
+        const delta = @bitCast(i8, self.readByte(self.PC));
+        const branch = switch (state) {
+            .Clear => current == 0,
+            .Set => current > 0,
+        };
+        if (!branch) {
+            self.PC += 1;
+        } else {
+            self.tick();
+            const newPC = @bitCast(Type.Word, @bitCast(i16, self.PC) + delta);
+            if (!samePage(self.PC, newPC)) {
+                self.tick();
+            }
+            self.PC = newPC;
+        }
     }
 
     fn computeAddress(self: *CPU, mode: AddressingMode, alwaysUseExtra: bool) Type.Word {
@@ -909,7 +945,7 @@ fn test_inc_dec(cpu: *CPU, op: CPU.IncDecOp, register: usize, address: Type.Word
     }
 }
 
-fn test_set_bit(cpu: *CPU, op: CPU.ClearSetOp, bit: Status.Name, ticks: u32) void {
+fn test_set_bit(cpu: *CPU, op: CPU.ClearSet, bit: Status.Name, ticks: u32) void {
     cpu.PC = TEST_ADDRESS;
     switch (op) {
         .Clear => cpu.PS.setBitByName(bit, 1),
@@ -935,6 +971,53 @@ fn test_set_bit(cpu: *CPU, op: CPU.ClearSetOp, bit: Status.Name, ticks: u32) voi
     testing.expect(bit == .Break or cpu.PS.bits.B == prevPS.bits.B);
     testing.expect(bit == .Overflow or cpu.PS.bits.V == prevPS.bits.V);
     testing.expect(bit == .Negative or cpu.PS.bits.N == prevPS.bits.N);
+}
+
+fn test_branch_bit(cpu: *CPU, bit: Status.Name, state: CPU.ClearSet, ticks: u32) void {
+    const Data = struct {
+        b: Type.Bit,
+        s: CPU.ClearSet,
+        d: u8,
+        x: u32,
+    };
+    const data = [_]Data{
+        .{ .b = 0, .s = .Clear, .d = 0x10, .x = 1 },
+        .{ .b = 0, .s = .Set, .d = 0x10, .x = 0 },
+        .{ .b = 1, .s = .Clear, .d = 0x10, .x = 0 },
+        .{ .b = 1, .s = .Set, .d = 0x10, .x = 1 },
+        .{ .b = 0, .s = .Clear, .d = 0x81, .x = 2 },
+        .{ .b = 0, .s = .Set, .d = 0x81, .x = 0 },
+        .{ .b = 1, .s = .Clear, .d = 0x81, .x = 0 },
+        .{ .b = 1, .s = .Set, .d = 0x81, .x = 2 },
+    };
+    for (data) |d| {
+        if (state != d.s) {
+            continue;
+        }
+        cpu.PC = TEST_ADDRESS;
+        cpu.memory.data[TEST_ADDRESS + 1] = d.d;
+        cpu.PS.setBitByName(bit, d.b);
+
+        const prevPS = cpu.PS; // remember PS
+        const prevRegs = cpu.regs; // remember registers
+
+        const expected = ticks + d.x;
+        const used = cpu.run(expected);
+        // std.debug.print("EXPECTED {}, USED {} TICKS\n", .{ expected, used });
+        testing.expect(used == expected);
+        var newPC: Type.Word = TEST_ADDRESS + 1;
+        if (d.x == 0) {
+            newPC += 1;
+        } else {
+            newPC = @bitCast(Type.Word, @bitCast(i16, newPC) + @bitCast(i8, d.d));
+        }
+        testing.expect(cpu.PC == newPC);
+        testing.expect(cpu.PS.byte == prevPS.byte);
+        testing.expect(cpu.regs[CPU.A] == prevRegs[CPU.A]);
+        testing.expect(cpu.regs[CPU.X] == prevRegs[CPU.X]);
+        testing.expect(cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
+        testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP]);
+    }
 }
 
 fn test_displace_bit(cpu: *CPU, op: CPU.DisplaceOp, register: usize, address: Type.Word, ticks: u32) void {
@@ -2127,6 +2210,64 @@ test "run ROR_ABSX" {
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
     test_displace_bit(&cpu, .RotateRight, 0, 0x8311 + 7, 7);
+}
+
+// Bit set / clear tests
+
+test "run BCC" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x90;
+    test_branch_bit(&cpu, .Carry, .Clear, 2);
+}
+
+test "run BCS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xB0;
+    test_branch_bit(&cpu, .Carry, .Set, 2);
+}
+
+test "run BEQ" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xF0;
+    test_branch_bit(&cpu, .Zero, .Set, 2);
+}
+
+test "run BMI" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x30;
+    test_branch_bit(&cpu, .Negative, .Set, 2);
+}
+
+test "run BNE" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xD0;
+    test_branch_bit(&cpu, .Zero, .Clear, 2);
+}
+
+test "run BPL" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x10;
+    test_branch_bit(&cpu, .Negative, .Clear, 2);
+}
+
+test "run BVC" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x50;
+    test_branch_bit(&cpu, .Overflow, .Clear, 2);
+}
+
+test "run BVS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x70;
+    test_branch_bit(&cpu, .Overflow, .Set, 2);
 }
 
 // NOP tests
