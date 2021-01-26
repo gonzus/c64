@@ -32,6 +32,11 @@ pub const CPU = struct {
         RotateRight,
     };
 
+    const NumOp = enum {
+        Add,
+        Subtract,
+    };
+
     const BitOp = enum {
         And,
         InclusiveOr,
@@ -141,6 +146,24 @@ pub const CPU = struct {
 
         BIT_ZP = 0x24,
         BIT_ABS = 0x2C,
+
+        ADC_IMM = 0x69,
+        ADC_ZP = 0x65,
+        ADC_ZPX = 0x75,
+        ADC_ABS = 0x6D,
+        ADC_ABSX = 0x7D,
+        ADC_ABSY = 0x79,
+        ADC_INDX = 0x61,
+        ADC_INDY = 0x71,
+
+        SBC_IMM = 0xE9,
+        SBC_ZP = 0xE5,
+        SBC_ZPX = 0xF5,
+        SBC_ABS = 0xED,
+        SBC_ABSX = 0xFD,
+        SBC_ABSY = 0xF9,
+        SBC_INDX = 0xE1,
+        SBC_INDY = 0xF1,
 
         INX = 0xE8,
         INY = 0xC8,
@@ -313,6 +336,24 @@ pub const CPU = struct {
                 OP.BIT_ZP => self.bitOp(.Bit, A, .ZeroPage),
                 OP.BIT_ABS => self.bitOp(.Bit, A, .Absolute),
 
+                OP.ADC_IMM => self.numOp(.Add, A, .Immediate),
+                OP.ADC_ZP => self.numOp(.Add, A, .ZeroPage),
+                OP.ADC_ZPX => self.numOp(.Add, A, .ZeroPageX),
+                OP.ADC_ABS => self.numOp(.Add, A, .Absolute),
+                OP.ADC_ABSX => self.numOp(.Add, A, .AbsoluteX),
+                OP.ADC_ABSY => self.numOp(.Add, A, .AbsoluteY),
+                OP.ADC_INDX => self.numOp(.Add, A, .IndirectX),
+                OP.ADC_INDY => self.numOp(.Add, A, .IndirectY),
+
+                OP.SBC_IMM => self.numOp(.Subtract, A, .Immediate),
+                OP.SBC_ZP => self.numOp(.Subtract, A, .ZeroPage),
+                OP.SBC_ZPX => self.numOp(.Subtract, A, .ZeroPageX),
+                OP.SBC_ABS => self.numOp(.Subtract, A, .Absolute),
+                OP.SBC_ABSX => self.numOp(.Subtract, A, .AbsoluteX),
+                OP.SBC_ABSY => self.numOp(.Subtract, A, .AbsoluteY),
+                OP.SBC_INDX => self.numOp(.Subtract, A, .IndirectX),
+                OP.SBC_INDY => self.numOp(.Subtract, A, .IndirectY),
+
                 OP.INX => self.incDecReg(.Increment, X),
                 OP.INY => self.incDecReg(.Increment, Y),
                 OP.INC_ZP => self.incDecMem(.Increment, .ZeroPage),
@@ -457,6 +498,28 @@ pub const CPU = struct {
         } else {
             self.regs[register] = result;
         }
+    }
+
+    fn numOp(self: *CPU, op: NumOp, register: usize, mode: AddressingMode) void {
+        const address = self.computeAddress(mode, false);
+        const value = self.readByte(address);
+        const carry: Type.Bit = if (self.PS.bits.C > 0) 1 else 0;
+        switch (op) {
+            .Add => self.addWithCarry(register, value, carry),
+            .Subtract => self.addWithCarry(register, ~value, ~carry),
+        }
+    }
+
+    fn addWithCarry(self: *CPU, register: usize, value: Type.Byte, carry: Type.Bit) void {
+        const reg: Type.Word = self.regs[register];
+        const val: Type.Word = value;
+        const car: Type.Word = carry;
+        const result = reg + val + car;
+        self.PS.bits.C = if (result > 0xFF) 1 else 0;
+        self.PS.bits.V = if ((~(reg ^ val) & (reg ^ result) & 0x80) > 0) 1 else 0;
+        // std.debug.print("{x} + {x} + {x} = {x}\n", .{ reg, val, car, result });
+        self.regs[register] = @intCast(Type.Byte, result & 0xFF);
+        self.setNZ(self.regs[register]);
     }
 
     fn incDecReg(self: *CPU, op: IncDecOp, register: usize) void {
@@ -941,6 +1004,202 @@ fn test_bitop_register(cpu: *CPU, op: CPU.BitOp, register: usize, address: Type.
         testing.expect(cpu.PS.bits.D == prevPS.bits.D);
         testing.expect(cpu.PS.bits.B == prevPS.bits.B);
         testing.expect(cpu.PS.bits.V == prevPS.bits.V);
+
+        // registers either got set or didn't change?
+        testing.expect(register == CPU.A or cpu.regs[CPU.A] == prevRegs[CPU.A]);
+        testing.expect(register == CPU.X or cpu.regs[CPU.X] == prevRegs[CPU.X]);
+        testing.expect(register == CPU.Y or cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
+        testing.expect(register == CPU.SP or cpu.regs[CPU.SP] == prevRegs[CPU.SP]);
+    }
+}
+
+fn test_numop_register(cpu: *CPU, op: CPU.NumOp, register: usize, address: Type.Word, ticks: u32) void {
+    const Data = struct {
+        oC: Type.Bit,
+        oR: Type.Byte,
+        oM: Type.Byte,
+        aR: Type.Byte,
+        sR: Type.Byte,
+        aC: Type.Bit,
+        aZ: Type.Bit,
+        aV: Type.Bit,
+        aN: Type.Bit,
+        sC: Type.Bit,
+        sZ: Type.Bit,
+        sV: Type.Bit,
+        sN: Type.Bit,
+    };
+    const data = [_]Data{
+        .{
+            .oC = 0,
+            .oR = 0b00000000,
+            .oM = 0b00000000,
+            .aR = 0b00000000,
+            .sR = 0b00000000,
+            .aC = 0,
+            .aZ = 1,
+            .aV = 0,
+            .aN = 0,
+            .sC = 1,
+            .sZ = 1,
+            .sV = 0,
+            .sN = 0,
+        },
+        .{
+            .oC = 0,
+            .oR = 0b00100100, // 36
+            .oM = 0b00001101, // 13
+            .aR = 0b00110001, // 49
+            .sR = 0b00010111, // 23
+            .aC = 0,
+            .aZ = 0,
+            .aV = 0,
+            .aN = 0,
+            .sC = 1,
+            .sZ = 0,
+            .sV = 0,
+            .sN = 0,
+        },
+        .{
+            .oC = 1,
+            .oR = 0b00100100, // 36
+            .oM = 0b00001101, // 13
+            .aR = 0b00110010, // 50
+            .sR = 0b00010110, // 22
+            .aC = 0,
+            .aZ = 0,
+            .aV = 0,
+            .aN = 0,
+            .sC = 1,
+            .sZ = 0,
+            .sV = 0,
+            .sN = 0,
+        },
+        .{
+            .oC = 0,
+            .oR = 0b01000001, //  65
+            .oM = 0b01000000, //  64
+            .aR = 0b10000001, // 129
+            .sR = 0b00000001, //   1
+            .aC = 0,
+            .aZ = 0,
+            .aV = 1,
+            .aN = 1,
+            .sC = 1,
+            .sZ = 0,
+            .sV = 0,
+            .sN = 0,
+        },
+        .{
+            .oC = 1,
+            .oR = 0b01000010, //  66
+            .oM = 0b01000000, //  64
+            .aR = 0b10000011, // 131
+            .sR = 0b00000001, //   1
+            .aC = 0,
+            .aZ = 0,
+            .aV = 1,
+            .aN = 1,
+            .sC = 1,
+            .sZ = 0,
+            .sV = 0,
+            .sN = 0,
+        },
+        .{
+            .oC = 0,
+            .oR = 0b10000001, // 129
+            .oM = 0b10000001, // 129
+            .aR = 0b00000010, //   2
+            .sR = 0b00000000, //   0
+            .aC = 1,
+            .aZ = 0,
+            .aV = 1,
+            .aN = 0,
+            .sC = 1,
+            .sZ = 1,
+            .sV = 0, // why?
+            .sN = 0,
+        },
+        .{
+            .oC = 1,
+            .oR = 0b10000001, // 129
+            .oM = 0b10000001, // 129
+            .aR = 0b00000011, //   3
+            .sR = 0b11111111, //  -1
+            .aC = 1,
+            .aZ = 0,
+            .aV = 1,
+            .aN = 0,
+            .sC = 0,
+            .sZ = 0,
+            .sV = 0, // why?
+            .sN = 1,
+        },
+        .{
+            .oC = 0,
+            .oR = 0b00001001, //  9
+            .oM = 0b11111100, // -4
+            .aR = 0b00000101, //  5
+            .sR = 0b00001101, // 13
+            .aC = 1,
+            .aZ = 0,
+            .aV = 0,
+            .aN = 0,
+            .sC = 0,
+            .sZ = 0,
+            .sV = 0,
+            .sN = 0,
+        },
+        .{
+            .oC = 1,
+            .oR = 0b00001001, //  9
+            .oM = 0b11111100, // -4
+            .aR = 0b00000110, //  6
+            .sR = 0b00001100, // 12
+            .aC = 1,
+            .aZ = 0,
+            .aV = 0,
+            .aN = 0,
+            .sC = 0,
+            .sZ = 0,
+            .sV = 0,
+            .sN = 0,
+        },
+    };
+    for (data) |d| {
+        cpu.PC = TEST_ADDRESS;
+        cpu.memory.data[address] = d.oM; // put value in memory address
+        const prevPS = cpu.PS; // remember PS
+        const prevRegs = cpu.regs; // remember registers
+        cpu.regs[register] = d.oR; // set desired register
+        cpu.PS.bits.C = d.oC; // set carry
+
+        const used = cpu.run(ticks);
+        testing.expect(used == ticks);
+
+        switch (op) {
+            .Add => {
+                // std.debug.print("GOT {d} EXPECTED {d}\n", .{ cpu.regs[register], d.aR });
+                testing.expect(cpu.regs[register] == d.aR); // got correct result?
+                testing.expect(cpu.PS.bits.C == d.aC); // got correct C bit?
+                testing.expect(cpu.PS.bits.Z == d.aZ); // got correct Z bit?
+                testing.expect(cpu.PS.bits.V == d.aV); // got correct V bit?
+                testing.expect(cpu.PS.bits.N == d.aN); // got correct N bit?
+            },
+            .Subtract => {
+                // std.debug.print("GOT {d} EXPECTED {d}\n", .{ cpu.regs[register], d.sR });
+                testing.expect(cpu.regs[register] == d.sR); // got correct result?
+                testing.expect(cpu.PS.bits.C == d.sC); // got correct C bit?
+                testing.expect(cpu.PS.bits.Z == d.sZ); // got correct Z bit?
+                testing.expect(cpu.PS.bits.V == d.sV); // got correct V bit?
+                testing.expect(cpu.PS.bits.N == d.sN); // got correct N bit?
+            },
+        }
+
+        // other bits didn't change?
+        testing.expect(cpu.PS.bits.I == prevPS.bits.I);
+        testing.expect(cpu.PS.bits.D == prevPS.bits.D);
+        testing.expect(cpu.PS.bits.B == prevPS.bits.B);
 
         // registers either got set or didn't change?
         testing.expect(register == CPU.A or cpu.regs[CPU.A] == prevRegs[CPU.A]);
@@ -1971,6 +2230,222 @@ test "run BIT_ABS" {
     cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
     test_bitop_register(&cpu, .Bit, CPU.A, 0x8311, 4);
+}
+
+// ADC tests
+
+test "run ADC_IMM" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x69;
+    test_numop_register(&cpu, .Add, CPU.A, TEST_ADDRESS + 1, 2);
+}
+
+test "run ADC_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x65;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_numop_register(&cpu, .Add, CPU.A, 0x0011, 3);
+}
+
+test "run ADC_ZPX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x75;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_numop_register(&cpu, .Add, CPU.A, 0x0011 + 7, 4);
+}
+
+test "run ADC_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x6D;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_numop_register(&cpu, .Add, CPU.A, 0x8311, 4);
+}
+
+test "run ADC_ABSX same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x7D;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_numop_register(&cpu, .Add, CPU.A, 0x8311 + 7, 4);
+}
+
+test "run ADC_ABSY same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x79;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_numop_register(&cpu, .Add, CPU.A, 0x8311 + 7, 4);
+}
+
+test "run ADC_ABSX cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x7D;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_numop_register(&cpu, .Add, CPU.A, 0x8311 + 0xFE, 5);
+}
+
+test "run ADC_ABSY cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x79;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_numop_register(&cpu, .Add, CPU.A, 0x8311 + 0xFE, 5);
+}
+
+test "run ADC_INDX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 4;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x61;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x20;
+    cpu.memory.data[0x20 + 4 + 0] = 0x74;
+    cpu.memory.data[0x20 + 4 + 1] = 0x20;
+    test_numop_register(&cpu, .Add, CPU.A, 0x2074, 6);
+}
+
+test "run ADC_INDY same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0x10;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x71;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
+    cpu.memory.data[0x86 + 0] = 0x28;
+    cpu.memory.data[0x86 + 1] = 0x40;
+    test_numop_register(&cpu, .Add, CPU.A, 0x4028 + 0x10, 5);
+}
+
+test "run ADC_INDY cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x71;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
+    cpu.memory.data[0x86 + 0] = 0x28;
+    cpu.memory.data[0x86 + 1] = 0x40;
+    test_numop_register(&cpu, .Add, CPU.A, 0x4028 + 0xFE, 6);
+}
+
+// SBC tests
+
+test "run SBC_IMM" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xE9;
+    test_numop_register(&cpu, .Subtract, CPU.A, TEST_ADDRESS + 1, 2);
+}
+
+test "run SBC_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xE5;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_numop_register(&cpu, .Subtract, CPU.A, 0x0011, 3);
+}
+
+test "run SBC_ZPX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xF5;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_numop_register(&cpu, .Subtract, CPU.A, 0x0011 + 7, 4);
+}
+
+test "run SBC_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xED;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_numop_register(&cpu, .Subtract, CPU.A, 0x8311, 4);
+}
+
+test "run SBC_ABSX same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xFD;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_numop_register(&cpu, .Subtract, CPU.A, 0x8311 + 7, 4);
+}
+
+test "run SBC_ABSY same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xF9;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_numop_register(&cpu, .Subtract, CPU.A, 0x8311 + 7, 4);
+}
+
+test "run SBC_ABSX cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xFD;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_numop_register(&cpu, .Subtract, CPU.A, 0x8311 + 0xFE, 5);
+}
+
+test "run SBC_ABSY cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xF9;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_numop_register(&cpu, .Subtract, CPU.A, 0x8311 + 0xFE, 5);
+}
+
+test "run SBC_INDX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 4;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xE1;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x20;
+    cpu.memory.data[0x20 + 4 + 0] = 0x74;
+    cpu.memory.data[0x20 + 4 + 1] = 0x20;
+    test_numop_register(&cpu, .Subtract, CPU.A, 0x2074, 6);
+}
+
+test "run SBC_INDY same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0x10;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xF1;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
+    cpu.memory.data[0x86 + 0] = 0x28;
+    cpu.memory.data[0x86 + 1] = 0x40;
+    test_numop_register(&cpu, .Subtract, CPU.A, 0x4028 + 0x10, 5);
+}
+
+test "run SBC_INDY cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xF1;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
+    cpu.memory.data[0x86 + 0] = 0x28;
+    cpu.memory.data[0x86 + 1] = 0x40;
+    test_numop_register(&cpu, .Subtract, CPU.A, 0x4028 + 0xFE, 6);
 }
 
 // INC tests
