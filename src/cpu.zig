@@ -165,6 +165,23 @@ pub const CPU = struct {
         SBC_INDX = 0xE1,
         SBC_INDY = 0xF1,
 
+        CMP_IMM = 0xC9,
+        CMP_ZP = 0xC5,
+        CMP_ZPX = 0xD5,
+        CMP_ABS = 0xCD,
+        CMP_ABSX = 0xDD,
+        CMP_ABSY = 0xD9,
+        CMP_INDX = 0xC1,
+        CMP_INDY = 0xD1,
+
+        CPX_IMM = 0xE0,
+        CPX_ZP = 0xE4,
+        CPX_ABS = 0xEC,
+
+        CPY_IMM = 0xC0,
+        CPY_ZP = 0xC4,
+        CPY_ABS = 0xCC,
+
         INX = 0xE8,
         INY = 0xC8,
         INC_ZP = 0xE6,
@@ -353,6 +370,23 @@ pub const CPU = struct {
                 OP.SBC_ABSY => self.numOp(.Subtract, A, .AbsoluteY),
                 OP.SBC_INDX => self.numOp(.Subtract, A, .IndirectX),
                 OP.SBC_INDY => self.numOp(.Subtract, A, .IndirectY),
+
+                OP.CMP_IMM => self.compareRegister(A, .Immediate),
+                OP.CMP_ZP => self.compareRegister(A, .ZeroPage),
+                OP.CMP_ZPX => self.compareRegister(A, .ZeroPageX),
+                OP.CMP_ABS => self.compareRegister(A, .Absolute),
+                OP.CMP_ABSX => self.compareRegister(A, .AbsoluteX),
+                OP.CMP_ABSY => self.compareRegister(A, .AbsoluteY),
+                OP.CMP_INDX => self.compareRegister(A, .IndirectX),
+                OP.CMP_INDY => self.compareRegister(A, .IndirectY),
+
+                OP.CPX_IMM => self.compareRegister(X, .Immediate),
+                OP.CPX_ZP => self.compareRegister(X, .ZeroPage),
+                OP.CPX_ABS => self.compareRegister(X, .Absolute),
+
+                OP.CPY_IMM => self.compareRegister(Y, .Immediate),
+                OP.CPY_ZP => self.compareRegister(Y, .ZeroPage),
+                OP.CPY_ABS => self.compareRegister(Y, .Absolute),
 
                 OP.INX => self.incDecReg(.Increment, X),
                 OP.INY => self.incDecReg(.Increment, Y),
@@ -632,6 +666,14 @@ pub const CPU = struct {
 
     fn returnToAddress(self: *CPU) void {
         self.PC = self.popWord() + 1;
+    }
+
+    fn compareRegister(self: *CPU, register: usize, mode: AddressingMode) void {
+        const address = self.computeAddress(mode, false);
+        const value = self.readByte(address);
+        self.PS.bits.C = if (self.regs[register] >= value) 1 else 0;
+        self.PS.bits.Z = if (self.regs[register] == value) 1 else 0;
+        self.PS.bits.N = if (self.regs[register] < value) 1 else 0;
     }
 
     fn computeAddress(self: *CPU, mode: AddressingMode, alwaysUseExtra: bool) Type.Word {
@@ -1206,6 +1248,67 @@ fn test_numop_register(cpu: *CPU, op: CPU.NumOp, register: usize, address: Type.
         testing.expect(register == CPU.X or cpu.regs[CPU.X] == prevRegs[CPU.X]);
         testing.expect(register == CPU.Y or cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
         testing.expect(register == CPU.SP or cpu.regs[CPU.SP] == prevRegs[CPU.SP]);
+    }
+}
+
+fn test_compare_register(cpu: *CPU, register: usize, address: Type.Word, ticks: u32) void {
+    const Data = struct {
+        R: Type.Byte,
+        M: Type.Byte,
+        C: Type.Bit,
+        Z: Type.Bit,
+        N: Type.Bit,
+    };
+    const data = [_]Data{
+        .{
+            .R = 0x43,
+            .M = 0x33,
+            .C = 1,
+            .Z = 0,
+            .N = 0,
+        },
+        .{
+            .R = 0x33,
+            .M = 0x33,
+            .C = 1,
+            .Z = 1,
+            .N = 0,
+        },
+        .{
+            .R = 0x33,
+            .M = 0x43,
+            .C = 0,
+            .Z = 0,
+            .N = 1,
+        },
+    };
+    for (data) |d| {
+        cpu.PC = TEST_ADDRESS;
+        cpu.memory.data[address] = d.M; // put value in memory address
+        cpu.regs[register] = d.R; // set desired register
+        cpu.PS.byte = 0;
+        const prevPS = cpu.PS; // remember PS
+        const prevRegs = cpu.regs; // remember registers
+
+        const used = cpu.run(ticks);
+        // std.debug.print("USED {d} EXPECTED {d}\n", .{ used, ticks });
+        testing.expect(used == ticks);
+
+        testing.expect(cpu.PS.bits.C == d.C); // got correct C bit?
+        testing.expect(cpu.PS.bits.Z == d.Z); // got correct Z bit?
+        testing.expect(cpu.PS.bits.N == d.N); // got correct N bit?
+
+        // other bits didn't change?
+        testing.expect(cpu.PS.bits.I == prevPS.bits.I);
+        testing.expect(cpu.PS.bits.D == prevPS.bits.D);
+        testing.expect(cpu.PS.bits.B == prevPS.bits.B);
+        testing.expect(cpu.PS.bits.V == prevPS.bits.V);
+
+        // registers didn't change?
+        testing.expect(cpu.regs[CPU.A] == prevRegs[CPU.A]);
+        testing.expect(cpu.regs[CPU.X] == prevRegs[CPU.X]);
+        testing.expect(cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
+        testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP]);
     }
 }
 
@@ -2446,6 +2549,166 @@ test "run SBC_INDY cross page" {
     cpu.memory.data[0x86 + 0] = 0x28;
     cpu.memory.data[0x86 + 1] = 0x40;
     test_numop_register(&cpu, .Subtract, CPU.A, 0x4028 + 0xFE, 6);
+}
+
+// CMP tests
+
+test "run CMP_IMM" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xC9;
+    test_compare_register(&cpu, CPU.A, TEST_ADDRESS + 1, 2);
+}
+
+test "run CMP_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xC5;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_compare_register(&cpu, CPU.A, 0x0011, 3);
+}
+
+test "run CMP_ZPX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xD5;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_compare_register(&cpu, CPU.A, 0x0011 + 7, 4);
+}
+
+test "run CMP_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xCD;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_compare_register(&cpu, CPU.A, 0x8311, 4);
+}
+
+test "run CMP_ABSX same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xDD;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_compare_register(&cpu, CPU.A, 0x8311 + 7, 4);
+}
+
+test "run CMP_ABSY same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 7;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xD9;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_compare_register(&cpu, CPU.A, 0x8311 + 7, 4);
+}
+
+test "run CMP_ABSX cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xDD;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_compare_register(&cpu, CPU.A, 0x8311 + 0xFE, 5);
+}
+
+test "run CMP_ABSY cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xD9;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_compare_register(&cpu, CPU.A, 0x8311 + 0xFE, 5);
+}
+
+test "run CMP_INDX" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.X] = 4;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xC1;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x20;
+    cpu.memory.data[0x20 + 4 + 0] = 0x74;
+    cpu.memory.data[0x20 + 4 + 1] = 0x20;
+    test_compare_register(&cpu, CPU.A, 0x2074, 6);
+}
+
+test "run CMP_INDY same page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0x10;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xD1;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
+    cpu.memory.data[0x86 + 0] = 0x28;
+    cpu.memory.data[0x86 + 1] = 0x40;
+    test_compare_register(&cpu, CPU.A, 0x4028 + 0x10, 5);
+}
+
+test "run CMP_INDY cross page" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.regs[CPU.Y] = 0xFE;
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xD1;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x86;
+    cpu.memory.data[0x86 + 0] = 0x28;
+    cpu.memory.data[0x86 + 1] = 0x40;
+    test_compare_register(&cpu, CPU.A, 0x4028 + 0xFE, 6);
+}
+
+// CPX tests
+
+test "run CPX_IMM" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xE0;
+    test_compare_register(&cpu, CPU.X, TEST_ADDRESS + 1, 2);
+}
+
+test "run CPX_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xE4;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_compare_register(&cpu, CPU.X, 0x0011, 3);
+}
+
+test "run CPX_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xEC;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_compare_register(&cpu, CPU.X, 0x8311, 4);
+}
+
+// CPY tests
+
+test "run CPY_IMM" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xC0;
+    test_compare_register(&cpu, CPU.Y, TEST_ADDRESS + 1, 2);
+}
+
+test "run CPY_ZP" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xC4;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    test_compare_register(&cpu, CPU.Y, 0x0011, 3);
+}
+
+test "run CPY_ABS" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0xCC;
+    cpu.memory.data[TEST_ADDRESS + 1] = 0x11;
+    cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
+    test_compare_register(&cpu, CPU.Y, 0x8311, 4);
 }
 
 // INC tests
