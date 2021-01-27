@@ -5,7 +5,7 @@ const testing = std.testing;
 const allocator = std.heap.page_allocator;
 
 pub const Memory = struct {
-    const SIZE = 0xFFFF;
+    const SIZE = 2 << 16;
 
     data: [SIZE]Type.Byte,
 
