@@ -242,6 +242,8 @@ pub const CPU = struct {
         JSR_ABS = 0x20,
         RTS = 0x60,
 
+        BRK = 0x00,
+        RTI = 0x40,
         NOP = 0xEA,
     };
 
@@ -448,6 +450,9 @@ pub const CPU = struct {
                 OP.JSR_ABS => self.jumpToAddress(.Absolute, true),
                 OP.RTS => self.returnToAddress(),
 
+                OP.BRK => self.forceInterrupt(),
+                OP.RTI => self.returnFromInterrupt(),
+
                 OP.NOP => self.tick(),
             }
         }
@@ -482,6 +487,7 @@ pub const CPU = struct {
 
     fn popByteFromStack(self: *CPU) Type.Byte {
         const value = self.popByte(true);
+        self.tick();
         return value;
     }
 
@@ -500,7 +506,6 @@ pub const CPU = struct {
 
     fn popByte(self: *CPU, flags: bool) Type.Byte {
         self.regs[SP] +%= 1;
-        self.tick();
         const address = @as(Type.Word, STACK_BASE) + self.regs[SP];
         const value = self.readByte(address);
         if (flags) {
@@ -512,9 +517,10 @@ pub const CPU = struct {
 
     fn popWord(self: *CPU) Type.Word {
         const lo = @as(Type.Word, self.popByte(false));
-        const hi = @as(Type.Word, self.popByte(false)) << 8;
-        const value = hi | lo;
         self.tick();
+        const hi = @as(Type.Word, self.popByte(false)) << 8;
+        self.tick();
+        const value = hi | lo;
         return value;
     }
 
@@ -666,6 +672,7 @@ pub const CPU = struct {
 
     fn returnToAddress(self: *CPU) void {
         self.PC = self.popWord() + 1;
+        self.tick();
     }
 
     fn compareRegister(self: *CPU, register: usize, mode: AddressingMode) void {
@@ -674,6 +681,20 @@ pub const CPU = struct {
         self.PS.bits.C = if (self.regs[register] >= value) 1 else 0;
         self.PS.bits.Z = if (self.regs[register] == value) 1 else 0;
         self.PS.bits.N = if (self.regs[register] < value) 1 else 0;
+    }
+
+    fn forceInterrupt(self: *CPU) void {
+        const interrupt_vector: Type.Word = 0xFFFE;
+        self.pushWord(self.PC);
+        self.pushByte(self.PS.byte);
+        self.tick();
+        self.PC = self.readWord(interrupt_vector);
+        self.PS.bits.B = 1;
+    }
+
+    fn returnFromInterrupt(self: *CPU) void {
+        self.PS.byte = self.popByte(false);
+        self.PC = self.popWord();
     }
 
     fn computeAddress(self: *CPU, mode: AddressingMode, alwaysUseExtra: bool) Type.Word {
@@ -1221,7 +1242,6 @@ fn test_numop_register(cpu: *CPU, op: CPU.NumOp, register: usize, address: Type.
 
         switch (op) {
             .Add => {
-                // std.debug.print("GOT {d} EXPECTED {d}\n", .{ cpu.regs[register], d.aR });
                 testing.expect(cpu.regs[register] == d.aR); // got correct result?
                 testing.expect(cpu.PS.bits.C == d.aC); // got correct C bit?
                 testing.expect(cpu.PS.bits.Z == d.aZ); // got correct Z bit?
@@ -1229,7 +1249,6 @@ fn test_numop_register(cpu: *CPU, op: CPU.NumOp, register: usize, address: Type.
                 testing.expect(cpu.PS.bits.N == d.aN); // got correct N bit?
             },
             .Subtract => {
-                // std.debug.print("GOT {d} EXPECTED {d}\n", .{ cpu.regs[register], d.sR });
                 testing.expect(cpu.regs[register] == d.sR); // got correct result?
                 testing.expect(cpu.PS.bits.C == d.sC); // got correct C bit?
                 testing.expect(cpu.PS.bits.Z == d.sZ); // got correct Z bit?
@@ -1291,7 +1310,6 @@ fn test_compare_register(cpu: *CPU, register: usize, address: Type.Word, ticks: 
         const prevRegs = cpu.regs; // remember registers
 
         const used = cpu.run(ticks);
-        // std.debug.print("USED {d} EXPECTED {d}\n", .{ used, ticks });
         testing.expect(used == ticks);
 
         testing.expect(cpu.PS.bits.C == d.C); // got correct C bit?
@@ -1447,7 +1465,6 @@ fn test_jmp(cpu: *CPU, address: Type.Word, pushReturn: bool, ticks: u32) void {
     const prevRegs = cpu.regs; // remember registers
 
     const used = cpu.run(ticks);
-    // std.debug.print("EXPECTED {}, USED {} TICKS\n", .{ ticks, used });
     testing.expect(used == ticks);
     testing.expect(cpu.PC == address);
     testing.expect(cpu.PS.byte == prevPS.byte);
@@ -1466,11 +1483,57 @@ fn test_rts(cpu: *CPU) void {
     const prevPS = cpu.PS; // remember PS
     const prevRegs = cpu.regs; // remember registers
 
-    const ticks: u32 = 12;
+    const ticks: u32 = 6 + 6;
     const used = cpu.run(ticks);
-    // std.debug.print("EXPECTED {}, USED {} TICKS\n", .{ ticks, used });
     testing.expect(used == ticks);
     testing.expect(cpu.PC == TEST_ADDRESS + 3);
+    testing.expect(cpu.PS.byte == prevPS.byte);
+    testing.expect(cpu.regs[CPU.A] == prevRegs[CPU.A]);
+    testing.expect(cpu.regs[CPU.X] == prevRegs[CPU.X]);
+    testing.expect(cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
+    testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP]);
+}
+
+fn test_brk(cpu: *CPU) void {
+    cpu.PC = TEST_ADDRESS;
+    cpu.memory.data[0xFFFE] = 0x37;
+    cpu.memory.data[0xFFFF] = 0x41;
+    cpu.PS.bits.B = 0;
+    const prevPS = cpu.PS; // remember PS
+    const prevRegs = cpu.regs; // remember registers
+
+    const ticks: u32 = 7;
+    const used = cpu.run(ticks);
+    testing.expect(used == ticks);
+    testing.expect(cpu.PC == 0x4137);
+    testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP] - 3);
+    testing.expect(cpu.PS.bits.B == 1);
+
+    // other bits didn't change?
+    testing.expect(cpu.PS.bits.C == prevPS.bits.C);
+    testing.expect(cpu.PS.bits.Z == prevPS.bits.Z);
+    testing.expect(cpu.PS.bits.I == prevPS.bits.I);
+    testing.expect(cpu.PS.bits.D == prevPS.bits.D);
+    testing.expect(cpu.PS.bits.V == prevPS.bits.V);
+    testing.expect(cpu.PS.bits.N == prevPS.bits.N);
+
+    testing.expect(cpu.regs[CPU.A] == prevRegs[CPU.A]);
+    testing.expect(cpu.regs[CPU.X] == prevRegs[CPU.X]);
+    testing.expect(cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
+}
+
+fn test_rti(cpu: *CPU) void {
+    cpu.PC = TEST_ADDRESS;
+    cpu.memory.data[0xFFFE] = 0x37;
+    cpu.memory.data[0xFFFF] = 0x41;
+    cpu.memory.data[0x4137] = 0x40;
+    const prevPS = cpu.PS; // remember PS
+    const prevRegs = cpu.regs; // remember registers
+
+    const ticks: u32 = 7 + 6;
+    const used = cpu.run(ticks);
+    testing.expect(used == ticks);
+    testing.expect(cpu.PC == TEST_ADDRESS + 1);
     testing.expect(cpu.PS.byte == prevPS.byte);
     testing.expect(cpu.regs[CPU.A] == prevRegs[CPU.A]);
     testing.expect(cpu.regs[CPU.X] == prevRegs[CPU.X]);
@@ -3147,6 +3210,24 @@ test "run RTS" {
     cpu.memory.data[TEST_ADDRESS + 2] = 0x83;
     cpu.memory.data[0x8311] = 0x60;
     test_rts(&cpu);
+}
+
+// BRK tests
+
+test "run BRK" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x00;
+    test_brk(&cpu);
+}
+
+// RIT tests
+
+test "run RTI" {
+    var cpu = CPU.init();
+    cpu.reset(TEST_ADDRESS);
+    cpu.memory.data[TEST_ADDRESS + 0] = 0x00;
+    test_rti(&cpu);
 }
 
 // NOP tests
