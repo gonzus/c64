@@ -633,6 +633,7 @@ pub const CPU = struct {
                 }
             },
         }
+        self.setNZ(displaced);
         self.tick();
         return displaced;
     }
