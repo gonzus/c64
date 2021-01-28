@@ -638,13 +638,12 @@ pub const CPU = struct {
     fn branchOnBit(self: *CPU, bit: Status.Name, state: ClearSet) void {
         const current = self.PS.getBitByName(bit);
         const delta = @bitCast(i8, self.readByte(self.PC));
+        self.PC += 1;
         const branch = switch (state) {
             .Clear => current == 0,
             .Set => current > 0,
         };
-        if (!branch) {
-            self.PC += 1;
-        } else {
+        if (branch) {
             self.tick();
             const newPC = @bitCast(Type.Word, @bitCast(i16, self.PC) + delta);
             if (!samePage(self.PC, newPC)) {
