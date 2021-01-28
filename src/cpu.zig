@@ -732,6 +732,7 @@ pub const CPU = struct {
             },
             .AbsoluteX => blk: {
                 const initial = self.readWord(self.PC);
+                self.PC += 2;
                 const final = initial + self.regs[X];
                 if (alwaysUseExtra or !samePage(initial, final)) {
                     self.tick();
@@ -740,6 +741,7 @@ pub const CPU = struct {
             },
             .AbsoluteY => blk: {
                 const initial = self.readWord(self.PC);
+                self.PC += 2;
                 const final = initial + self.regs[Y];
                 if (alwaysUseExtra or !samePage(initial, final)) {
                     self.tick();
@@ -748,6 +750,7 @@ pub const CPU = struct {
             },
             .Indirect => blk: {
                 const initial = self.readWord(self.PC);
+                self.PC += 2;
                 const address = self.readWord(initial);
                 break :blk address;
             },
