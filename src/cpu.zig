@@ -712,6 +712,7 @@ pub const CPU = struct {
                 var address = @as(Type.Word, self.readByte(self.PC));
                 self.PC += 1;
                 address +%= self.regs[X];
+                address &= 0xFF;
                 self.tick();
                 break :blk address;
             },
@@ -719,6 +720,7 @@ pub const CPU = struct {
                 var address = @as(Type.Word, self.readByte(self.PC));
                 self.PC += 1;
                 address +%= self.regs[Y];
+                address &= 0xFF;
                 self.tick();
                 break :blk address;
             },
@@ -752,6 +754,7 @@ pub const CPU = struct {
                 var address = @as(Type.Word, self.readByte(self.PC));
                 self.PC += 1;
                 address +%= self.regs[X];
+                address &= 0xFF;
                 self.tick();
                 const final = self.readWord(address);
                 break :blk final;
