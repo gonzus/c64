@@ -532,10 +532,12 @@ pub const CPU = struct {
             .InclusiveOr => self.regs[register] | value,
             .ExclusiveOr => self.regs[register] ^ value,
         };
-        self.setNZ(result);
         if (op == .Bit) {
-            self.PS.bits.V = if ((result & 0b01000000) > 0) 1 else 0;
+            self.PS.bits.N = if ((value & 0b10000000) > 0) 1 else 0;
+            self.PS.bits.V = if ((value & 0b01000000) > 0) 1 else 0;
+            self.PS.bits.Z = if ((result | 0b00000000) > 0) 0 else 1;
         } else {
+            self.setNZ(result);
             self.regs[register] = result;
         }
     }
