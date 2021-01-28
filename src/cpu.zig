@@ -689,6 +689,7 @@ pub const CPU = struct {
         self.tick();
         self.PC = self.readWord(interrupt_vector);
         self.PS.bits.B = 1;
+        self.PS.bits.I = 1;
     }
 
     fn returnFromInterrupt(self: *CPU) void {
