@@ -25,7 +25,7 @@ pub const Status = extern union {
         I: Type.Bit,
         D: Type.Bit,
         B: Type.Bit,
-        u: Type.Bit,
+        U: Type.Bit,
         V: Type.Bit,
         N: Type.Bit,
     };
@@ -99,5 +99,13 @@ test "create PS with initial bit values" {
     PS.bits.V = 1;
     PS.bits.N = 1;
     // PS.show();
+    testing.expect(PS.byte == 0b11000001);
+    testing.expect(PS.getBitByName(Status.Name.Carry) == 1);
+    testing.expect(PS.getBitByName(Status.Name.Overflow) == 1);
+    testing.expect(PS.getBitByName(Status.Name.Negative) == 1);
+    testing.expect(PS.getBitByName(Status.Name.Zero) == 0);
+    testing.expect(PS.getBitByName(Status.Name.Interrupt) == 0);
+    testing.expect(PS.getBitByName(Status.Name.Decimal) == 0);
+    testing.expect(PS.getBitByName(Status.Name.Break) == 0);
     testing.expect(PS.byte == 0b11000001);
 }

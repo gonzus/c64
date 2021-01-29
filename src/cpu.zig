@@ -320,10 +320,10 @@ pub const CPU = struct {
                 OP.TSX => self.transfer(SP, X, true),
                 OP.TXS => self.transfer(X, SP, false),
 
-                OP.PHA => self.pushByteToStack(self.regs[A]),
-                OP.PHP => self.pushByteToStack(self.PS.byte),
-                OP.PLA => self.regs[A] = self.popByteFromStack(),
-                OP.PLP => self.PS.byte = self.popByteFromStack(),
+                OP.PHA => self.pushRegisterToStack(A),
+                OP.PHP => self.pushPSToStack(),
+                OP.PLA => self.popRegisterFromStack(A),
+                OP.PLP => self.popPSFromStack(true),
 
                 OP.AND_IMM => self.bitOp(.And, A, .Immediate),
                 OP.AND_ZP => self.bitOp(.And, A, .ZeroPage),
@@ -480,15 +480,35 @@ pub const CPU = struct {
         self.tick();
     }
 
-    fn pushByteToStack(self: *CPU, byte: Type.Byte) void {
-        self.pushByte(byte);
+    fn pushRegisterToStack(self: *CPU, register: usize) void {
+        const pushed = self.regs[register];
+        self.pushByte(pushed);
         self.tick();
     }
 
-    fn popByteFromStack(self: *CPU) Type.Byte {
-        const value = self.popByte(true);
+    fn popRegisterFromStack(self: *CPU, register: usize) void {
+        const popped = self.popByte(true);
+        self.regs[register] = popped;
+        self.setNZ(popped);
         self.tick();
-        return value;
+    }
+
+    fn pushPSToStack(self: *CPU) void {
+        var pushed = self.PS;
+        pushed.bits.B = 1;
+        pushed.bits.U = 1;
+        self.pushByte(pushed.byte);
+        self.tick();
+    }
+
+    fn popPSFromStack(self: *CPU, doTick: bool) void {
+        const popped = self.popByte(doTick);
+        self.PS.byte = popped;
+        self.PS.bits.B = 0;
+        self.PS.bits.U = 0;
+        if (doTick) {
+            self.tick();
+        }
     }
 
     fn pushByte(self: *CPU, value: Type.Byte) void {
@@ -504,13 +524,12 @@ pub const CPU = struct {
         self.pushByte(@intCast(Type.Byte, lo));
     }
 
-    fn popByte(self: *CPU, flags: bool) Type.Byte {
+    fn popByte(self: *CPU, doTick: bool) Type.Byte {
         self.regs[SP] +%= 1;
         const address = @as(Type.Word, STACK_BASE) + self.regs[SP];
         const value = self.readByte(address);
-        if (flags) {
+        if (doTick) {
             self.tick();
-            self.setNZ(value);
         }
         return value;
     }
@@ -687,16 +706,15 @@ pub const CPU = struct {
 
     fn forceInterrupt(self: *CPU) void {
         const interrupt_vector: Type.Word = 0xFFFE;
-        self.pushWord(self.PC);
-        self.pushByte(self.PS.byte);
-        self.tick();
+        self.pushWord(self.PC + 1);
+        self.pushPSToStack();
         self.PC = self.readWord(interrupt_vector);
         self.PS.bits.B = 1;
         self.PS.bits.I = 1;
     }
 
     fn returnFromInterrupt(self: *CPU) void {
-        self.PS.byte = self.popByte(false);
+        self.popPSFromStack(false);
         self.PC = self.popWord();
     }
 
@@ -940,7 +958,7 @@ fn test_transfer_register(cpu: *CPU, source: usize, target: usize, flags: bool, 
     }
 }
 
-fn test_push_register(cpu: *CPU, location: *Type.Byte, ticks: u32) void {
+fn test_push_register(cpu: *CPU, register: usize, ticks: u32) void {
     const Data = struct {
         v: Type.Byte,
     };
@@ -952,7 +970,7 @@ fn test_push_register(cpu: *CPU, location: *Type.Byte, ticks: u32) void {
     for (data) |d| {
         cpu.PC = TEST_ADDRESS;
         cpu.PS.byte = 0; // set PS to 0
-        location.* = d.v; // put value in register
+        cpu.regs[register] = d.v; // put value in register
         const prevPS = cpu.PS; // remember PS
         const prevRegs = cpu.regs; // remember registers
         const used = cpu.run(ticks);
@@ -972,7 +990,42 @@ fn test_push_register(cpu: *CPU, location: *Type.Byte, ticks: u32) void {
     }
 }
 
-fn test_pop_register(cpu: *CPU, location: *Type.Byte, ticks: u32) void {
+fn test_push_status(cpu: *CPU, ticks: u32) void {
+    const Data = struct {
+        v: Type.Byte,
+    };
+    const data = [_]Data{
+        .{ .v = 0x11 },
+        .{ .v = 0xF0 },
+        .{ .v = 0x00 },
+    };
+    for (data) |d| {
+        cpu.PC = TEST_ADDRESS;
+        cpu.PS.byte = d.v; // put value in PS
+        var pushed = cpu.PS;
+        pushed.setBitByName(.Break, 1);
+        pushed.setBitByName(.UNUSED, 1);
+
+        const prevPS = cpu.PS; // remember PS
+        const prevRegs = cpu.regs; // remember registers
+        const used = cpu.run(ticks);
+
+        testing.expect(used == ticks);
+        testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP] - 1); // did SP move?
+        const address = @as(Type.Word, CPU.STACK_BASE) + prevRegs[CPU.SP];
+        testing.expect(cpu.memory.data[address] == pushed.byte); // did the value get pushed?
+
+        // none of the bits changed?
+        testing.expect(cpu.PS.byte == prevPS.byte);
+
+        // registers didn't change?
+        testing.expect(cpu.regs[CPU.A] == prevRegs[CPU.A]);
+        testing.expect(cpu.regs[CPU.X] == prevRegs[CPU.X]);
+        testing.expect(cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
+    }
+}
+
+fn test_pop_register(cpu: *CPU, register: usize, ticks: u32) void {
     const Data = struct {
         v: Type.Byte,
         N: Type.Bit,
@@ -994,7 +1047,7 @@ fn test_pop_register(cpu: *CPU, location: *Type.Byte, ticks: u32) void {
         const pos = data.len - 1 - p;
         cpu.PC = TEST_ADDRESS;
         cpu.PS.byte = 0; // set PS to 0
-        location.* = 0;
+        cpu.regs[register] = 0; // set register to 0
         const prevPS = cpu.PS; // remember PS
         const prevRegs = cpu.regs; // remember registers
         const used = cpu.run(ticks);
@@ -1002,21 +1055,61 @@ fn test_pop_register(cpu: *CPU, location: *Type.Byte, ticks: u32) void {
         testing.expect(used == ticks);
         testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP] + 1); // did SP move?
         const address = @as(Type.Word, CPU.STACK_BASE) + prevRegs[CPU.SP];
-        testing.expect(location.* == data[pos].v); // did the value get popped?
+        testing.expect(cpu.regs[register] == data[pos].v); // did the value get popped?
 
-        if (location == &cpu.regs[CPU.A]) {
-            testing.expect(cpu.PS.bits.N == data[pos].N); // got correct N bit?
-            testing.expect(cpu.PS.bits.Z == data[pos].Z); // got correct Z bit?
-            // other bits didn't change?
-            testing.expect(cpu.PS.bits.C == prevPS.bits.C);
-            testing.expect(cpu.PS.bits.I == prevPS.bits.I);
-            testing.expect(cpu.PS.bits.D == prevPS.bits.D);
-            testing.expect(cpu.PS.bits.B == prevPS.bits.B);
-            testing.expect(cpu.PS.bits.V == prevPS.bits.V);
-        }
+        testing.expect(cpu.PS.bits.N == data[pos].N); // got correct N bit?
+        testing.expect(cpu.PS.bits.Z == data[pos].Z); // got correct Z bit?
+        // other bits didn't change?
+        testing.expect(cpu.PS.bits.C == prevPS.bits.C);
+        testing.expect(cpu.PS.bits.I == prevPS.bits.I);
+        testing.expect(cpu.PS.bits.D == prevPS.bits.D);
+        testing.expect(cpu.PS.bits.B == prevPS.bits.B);
+        testing.expect(cpu.PS.bits.V == prevPS.bits.V);
 
         // registers didn't change?
-        testing.expect(location == &cpu.regs[CPU.A] or cpu.regs[CPU.A] == prevRegs[CPU.A]);
+        testing.expect(cpu.regs[CPU.X] == prevRegs[CPU.X]);
+        testing.expect(cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
+    }
+    testing.expect(cpu.regs[CPU.SP] == 0xFF);
+}
+
+fn test_pop_status(cpu: *CPU, ticks: u32) void {
+    const Data = struct {
+        v: Type.Byte,
+        N: Type.Bit,
+        Z: Type.Bit,
+    };
+    const data = [_]Data{
+        .{ .v = 0x11, .N = 0, .Z = 0 },
+        .{ .v = 0xF0, .N = 1, .Z = 0 },
+        .{ .v = 0x00, .N = 0, .Z = 1 },
+    };
+    var SP: Type.Byte = 0xFF;
+    for (data) |d| {
+        const address = @as(Type.Word, CPU.STACK_BASE) + SP;
+        cpu.memory.data[address] = d.v; // set value in stack
+        SP -%= 1;
+    }
+    cpu.regs[CPU.SP] = SP;
+    for (data) |d, p| {
+        const pos = data.len - 1 - p;
+        cpu.PC = TEST_ADDRESS;
+        cpu.PS.byte = 0; // set PS to 0
+        const prevPS = cpu.PS; // remember PS
+        const prevRegs = cpu.regs; // remember registers
+        const used = cpu.run(ticks);
+        testing.expect(used == ticks);
+
+        var popped = cpu.PS;
+        popped.byte = data[pos].v; // did the value get popped?
+        popped.setBitByName(.Break, 0);
+        popped.setBitByName(.UNUSED, 0);
+        testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP] + 1); // did SP move?
+        const address = @as(Type.Word, CPU.STACK_BASE) + prevRegs[CPU.SP];
+        testing.expect(cpu.PS.byte == popped.byte); // did the value get popped?
+
+        // registers didn't change?
+        testing.expect(cpu.regs[CPU.A] == prevRegs[CPU.A]);
         testing.expect(cpu.regs[CPU.X] == prevRegs[CPU.X]);
         testing.expect(cpu.regs[CPU.Y] == prevRegs[CPU.Y]);
     }
@@ -1055,27 +1148,29 @@ fn test_bitop_register(cpu: *CPU, op: CPU.BitOp, register: usize, address: Type.
             .InclusiveOr => d.m | d.r,
             .ExclusiveOr => d.m ^ d.r,
         };
-        const afterN: Type.Bit = if ((afterR & 0b10000000) > 0) 1 else 0;
-        const afterV: Type.Bit = if ((afterR & 0b01000000) > 0) 1 else 0;
-        const afterZ: Type.Bit = if ((afterR | 0b00000000) > 0) 0 else 1;
 
         const used = cpu.run(ticks);
         testing.expect(used == ticks);
 
+        const afterZ: Type.Bit = if ((afterR | 0b00000000) > 0) 0 else 1;
+        testing.expect(cpu.PS.bits.Z == afterZ); // got correct N bit?
+
         if (op == .Bit) {
-            testing.expect(cpu.PS.bits.V == afterV); // got correct N bit?
+            const afterN: Type.Bit = if ((d.m & 0b10000000) > 0) 1 else 0;
+            const afterV: Type.Bit = if ((d.m & 0b01000000) > 0) 1 else 0;
+            testing.expect(cpu.PS.bits.N == afterN); // got correct N bit?
+            testing.expect(cpu.PS.bits.V == afterV); // got correct V bit?
         } else {
+            const afterN: Type.Bit = if ((afterR & 0b10000000) > 0) 1 else 0;
+            testing.expect(cpu.PS.bits.N == afterN); // got correct N bit?
             testing.expect(cpu.regs[register] == afterR); // got correct after value in register?
         }
-        testing.expect(cpu.PS.bits.N == afterN); // got correct N bit?
-        testing.expect(cpu.PS.bits.Z == afterZ); // got correct Z bit?
 
         // other bits didn't change?
         testing.expect(cpu.PS.bits.C == prevPS.bits.C);
         testing.expect(cpu.PS.bits.I == prevPS.bits.I);
         testing.expect(cpu.PS.bits.D == prevPS.bits.D);
         testing.expect(cpu.PS.bits.B == prevPS.bits.B);
-        testing.expect(cpu.PS.bits.V == prevPS.bits.V);
 
         // registers either got set or didn't change?
         testing.expect(register == CPU.A or cpu.regs[CPU.A] == prevRegs[CPU.A]);
@@ -1453,10 +1548,8 @@ fn test_branch_bit(cpu: *CPU, bit: Status.Name, state: CPU.ClearSet, ticks: u32)
         const expected = ticks + d.x;
         const used = cpu.run(expected);
         testing.expect(used == expected);
-        var newPC: Type.Word = TEST_ADDRESS + 1;
-        if (d.x == 0) {
-            newPC += 1;
-        } else {
+        var newPC: Type.Word = TEST_ADDRESS + 2;
+        if (d.x > 0) {
             newPC = @bitCast(Type.Word, @bitCast(i16, newPC) + @bitCast(i8, d.d));
         }
         testing.expect(cpu.PC == newPC);
@@ -1517,11 +1610,11 @@ fn test_brk(cpu: *CPU) void {
     testing.expect(cpu.PC == 0x4137);
     testing.expect(cpu.regs[CPU.SP] == prevRegs[CPU.SP] - 3);
     testing.expect(cpu.PS.bits.B == 1);
+    testing.expect(cpu.PS.bits.I == 1);
 
     // other bits didn't change?
     testing.expect(cpu.PS.bits.C == prevPS.bits.C);
     testing.expect(cpu.PS.bits.Z == prevPS.bits.Z);
-    testing.expect(cpu.PS.bits.I == prevPS.bits.I);
     testing.expect(cpu.PS.bits.D == prevPS.bits.D);
     testing.expect(cpu.PS.bits.V == prevPS.bits.V);
     testing.expect(cpu.PS.bits.N == prevPS.bits.N);
@@ -1542,7 +1635,7 @@ fn test_rti(cpu: *CPU) void {
     const ticks: u32 = 7 + 6;
     const used = cpu.run(ticks);
     testing.expect(used == ticks);
-    testing.expect(cpu.PC == TEST_ADDRESS + 1);
+    testing.expect(cpu.PC == TEST_ADDRESS + 2);
     testing.expect(cpu.PS.byte == prevPS.byte);
     testing.expect(cpu.regs[CPU.A] == prevRegs[CPU.A]);
     testing.expect(cpu.regs[CPU.X] == prevRegs[CPU.X]);
@@ -1603,13 +1696,16 @@ fn test_displace_bit(cpu: *CPU, op: CPU.DisplaceOp, register: usize, address: Ty
         }
         testing.expect(cpu.PS.bits.C == d.nC);
 
+        const nZ: Type.Bit = if ((d.e | 0b00000000) > 0) 0 else 1;
+        const nN: Type.Bit = if ((d.e & 0b10000000) > 0) 1 else 0;
+        testing.expect(cpu.PS.bits.Z == nZ);
+        testing.expect(cpu.PS.bits.N == nN);
+
         // other bits didn't change?
-        testing.expect(cpu.PS.bits.Z == prevPS.bits.Z);
         testing.expect(cpu.PS.bits.I == prevPS.bits.I);
         testing.expect(cpu.PS.bits.D == prevPS.bits.D);
         testing.expect(cpu.PS.bits.B == prevPS.bits.B);
         testing.expect(cpu.PS.bits.V == prevPS.bits.V);
-        testing.expect(cpu.PS.bits.N == prevPS.bits.N);
     }
 }
 
@@ -2038,14 +2134,14 @@ test "run PHA" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0x48;
-    test_push_register(&cpu, &cpu.regs[CPU.A], 3);
+    test_push_register(&cpu, CPU.A, 3);
 }
 
 test "run PHP" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0x08;
-    test_push_register(&cpu, &cpu.PS.byte, 3);
+    test_push_status(&cpu, 3);
 }
 
 // pop
@@ -2054,14 +2150,14 @@ test "run PLA" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0x68;
-    test_pop_register(&cpu, &cpu.regs[CPU.A], 4);
+    test_pop_register(&cpu, CPU.A, 4);
 }
 
 test "run PLP" {
     var cpu = CPU.init();
     cpu.reset(TEST_ADDRESS);
     cpu.memory.data[TEST_ADDRESS + 0] = 0x28;
-    test_pop_register(&cpu, &cpu.PS.byte, 4);
+    test_pop_status(&cpu, 4);
 }
 
 // AND tests
@@ -3230,7 +3326,7 @@ test "run BRK" {
     test_brk(&cpu);
 }
 
-// RIT tests
+// RTI tests
 
 test "run RTI" {
     var cpu = CPU.init();
