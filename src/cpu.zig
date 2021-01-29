@@ -802,7 +802,7 @@ pub const CPU = struct {
         self.ticks += 1;
     }
 
-    fn setNZ(self: *CPU, value: Type.Word) void {
+    fn setNZ(self: *CPU, value: Type.Byte) void {
         self.PS.bits.N = if ((value & 0b10000000) > 0) 1 else 0;
         self.PS.bits.Z = if ((value | 0b00000000) > 0) 0 else 1;
     }
