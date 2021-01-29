@@ -564,20 +564,19 @@ pub const CPU = struct {
     fn numOp(self: *CPU, op: NumOp, register: usize, mode: AddressingMode) void {
         const address = self.computeAddress(mode, false);
         const value = self.readByte(address);
-        const carry: Type.Bit = if (self.PS.bits.C > 0) 1 else 0;
         switch (op) {
-            .Add => self.addWithCarry(register, value, carry),
-            .Subtract => self.addWithCarry(register, ~value, ~carry),
+            .Add => self.addWithCarry(register, value),
+            .Subtract => self.addWithCarry(register, ~value),
         }
     }
 
-    fn addWithCarry(self: *CPU, register: usize, value: Type.Byte, carry: Type.Bit) void {
+    fn addWithCarry(self: *CPU, register: usize, value: Type.Byte) void {
         const reg: Type.Word = self.regs[register];
         const val: Type.Word = value;
-        const car: Type.Word = carry;
+        const car: Type.Word = if (self.PS.bits.C > 0) 1 else 0;
         const result = reg + val + car;
         self.PS.bits.C = if (result > 0xFF) 1 else 0;
-        self.PS.bits.V = if ((~(reg ^ val) & (reg ^ result) & 0x80) > 0) 1 else 0;
+        self.PS.bits.V = if (((~(reg ^ val)) & (result ^ val) & 0x80) > 0) 1 else 0;
         // std.debug.print("{x} + {x} + {x} = {x}\n", .{ reg, val, car, result });
         self.regs[register] = @intCast(Type.Byte, result & 0xFF);
         self.setNZ(self.regs[register]);
@@ -1202,9 +1201,24 @@ fn test_numop_register(cpu: *CPU, op: CPU.NumOp, register: usize, address: Type.
             .oR = 0b00000000,
             .oM = 0b00000000,
             .aR = 0b00000000,
-            .sR = 0b00000000,
+            .sR = 0b11111111,
             .aC = 0,
             .aZ = 1,
+            .aV = 0,
+            .aN = 0,
+            .sC = 0,
+            .sZ = 0,
+            .sV = 0,
+            .sN = 1,
+        },
+        .{
+            .oC = 1,
+            .oR = 0b00000000,
+            .oM = 0b00000000,
+            .aR = 0b00000001,
+            .sR = 0b00000000,
+            .aC = 0,
+            .aZ = 0,
             .aV = 0,
             .aN = 0,
             .sC = 1,
@@ -1217,7 +1231,7 @@ fn test_numop_register(cpu: *CPU, op: CPU.NumOp, register: usize, address: Type.
             .oR = 0b00100100, // 36
             .oM = 0b00001101, // 13
             .aR = 0b00110001, // 49
-            .sR = 0b00010111, // 23
+            .sR = 0b00010110, // 22
             .aC = 0,
             .aZ = 0,
             .aV = 0,
@@ -1232,7 +1246,7 @@ fn test_numop_register(cpu: *CPU, op: CPU.NumOp, register: usize, address: Type.
             .oR = 0b00100100, // 36
             .oM = 0b00001101, // 13
             .aR = 0b00110010, // 50
-            .sR = 0b00010110, // 22
+            .sR = 0b00010111, // 23
             .aC = 0,
             .aZ = 0,
             .aV = 0,
@@ -1247,13 +1261,13 @@ fn test_numop_register(cpu: *CPU, op: CPU.NumOp, register: usize, address: Type.
             .oR = 0b01000001, //  65
             .oM = 0b01000000, //  64
             .aR = 0b10000001, // 129
-            .sR = 0b00000001, //   1
+            .sR = 0b00000000, //   0
             .aC = 0,
             .aZ = 0,
             .aV = 1,
             .aN = 1,
             .sC = 1,
-            .sZ = 0,
+            .sZ = 1,
             .sV = 0,
             .sN = 0,
         },
@@ -1262,7 +1276,7 @@ fn test_numop_register(cpu: *CPU, op: CPU.NumOp, register: usize, address: Type.
             .oR = 0b01000010, //  66
             .oM = 0b01000000, //  64
             .aR = 0b10000011, // 131
-            .sR = 0b00000001, //   1
+            .sR = 0b00000010, //   2
             .aC = 0,
             .aZ = 0,
             .aV = 1,
@@ -1277,21 +1291,6 @@ fn test_numop_register(cpu: *CPU, op: CPU.NumOp, register: usize, address: Type.
             .oR = 0b10000001, // 129
             .oM = 0b10000001, // 129
             .aR = 0b00000010, //   2
-            .sR = 0b00000000, //   0
-            .aC = 1,
-            .aZ = 0,
-            .aV = 1,
-            .aN = 0,
-            .sC = 1,
-            .sZ = 1,
-            .sV = 0, // why?
-            .sN = 0,
-        },
-        .{
-            .oC = 1,
-            .oR = 0b10000001, // 129
-            .oM = 0b10000001, // 129
-            .aR = 0b00000011, //   3
             .sR = 0b11111111, //  -1
             .aC = 1,
             .aZ = 0,
@@ -1299,15 +1298,30 @@ fn test_numop_register(cpu: *CPU, op: CPU.NumOp, register: usize, address: Type.
             .aN = 0,
             .sC = 0,
             .sZ = 0,
-            .sV = 0, // why?
+            .sV = 0,
             .sN = 1,
+        },
+        .{
+            .oC = 1,
+            .oR = 0b10000001, // 129
+            .oM = 0b10000001, // 129
+            .aR = 0b00000011, //   3
+            .sR = 0b00000000, //   0
+            .aC = 1,
+            .aZ = 0,
+            .aV = 1,
+            .aN = 0,
+            .sC = 1,
+            .sZ = 1,
+            .sV = 0,
+            .sN = 0,
         },
         .{
             .oC = 0,
             .oR = 0b00001001, //  9
             .oM = 0b11111100, // -4
             .aR = 0b00000101, //  5
-            .sR = 0b00001101, // 13
+            .sR = 0b00001100, // 12
             .aC = 1,
             .aZ = 0,
             .aV = 0,
@@ -1322,7 +1336,7 @@ fn test_numop_register(cpu: *CPU, op: CPU.NumOp, register: usize, address: Type.
             .oR = 0b00001001, //  9
             .oM = 0b11111100, // -4
             .aR = 0b00000110, //  6
-            .sR = 0b00001100, // 12
+            .sR = 0b00001101, // 13
             .aC = 1,
             .aZ = 0,
             .aV = 0,
